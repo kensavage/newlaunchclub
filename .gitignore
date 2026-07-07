@@ -1,0 +1,13 @@
+.DS_Store
+.agents/
+.env
+.env*.local
+.next/
+.netlify/
+node_modules/
+coverage/
+playwright-report/
+test-results/
+dist/
+skills-lock.json
+*.tsbuildinfo

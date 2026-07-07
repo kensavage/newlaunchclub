@@ -1,0 +1,51 @@
+{
+  "name": "launchclub-ai-search-report",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "env:check": "node scripts/check-provider-env.mjs",
+    "env:check:strict": "node scripts/check-provider-env.mjs --strict",
+    "smoke:providers": "node scripts/smoke-providers.mjs",
+    "smoke:providers:credits": "node scripts/smoke-providers.mjs --spend-credits",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@netlify/functions": "^4.3.0",
+    "@remotion/player": "4.0.485",
+    "@supabase/supabase-js": "^2.107.0",
+    "lucide-react": "^1.21.0",
+    "next": "^16.2.10",
+    "openai": "^6.13.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "remotion": "4.0.485",
+    "server-only": "^0.0.1",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@netlify/plugin-nextjs": "^5.15.11",
+    "@playwright/test": "^1.57.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.1",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.1",
+    "eslint-config-next": "^16.2.10",
+    "jsdom": "^27.2.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  },
+  "overrides": {
+    "postcss": "8.5.15"
+  }
+}
