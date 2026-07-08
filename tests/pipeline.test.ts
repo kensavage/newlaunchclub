@@ -25,6 +25,12 @@ describe("report worker pipeline", () => {
 
     expect(completedJob?.status).toBe("complete");
     expect(completedJob?.progress).toBe(100);
+    expect(completedJob?.steps.map((step) => step.label)).not.toContain("Report ready");
+    expect(completedJob?.steps.at(-1)).toMatchObject({
+      id: "synthesis",
+      label: "Building browser report",
+      status: "complete"
+    });
     expect(report).not.toBeNull();
     const parsedReport = opportunityReportSchema.parse(report);
     expect(parsedReport.keywordOpportunities.length).toBeGreaterThanOrEqual(8);

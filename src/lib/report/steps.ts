@@ -7,8 +7,7 @@ export const reportStepDefinitions: Array<{ id: ReportStepId; label: string }> =
   { id: "keywords", label: "Finding keywords and Google/Reddit opportunities" },
   { id: "reddit", label: "Researching Reddit discussions" },
   { id: "ai-search", label: "Mapping AI-search citation opportunities" },
-  { id: "synthesis", label: "Building browser report" },
-  { id: "complete", label: "Report ready" }
+  { id: "synthesis", label: "Building browser report" }
 ];
 
 const progressByStep: Record<ReportStepId, number> = {

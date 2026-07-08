@@ -176,7 +176,7 @@ async function setComplete(store: ReportStore, publicId: string) {
     currentStep: "complete",
     progress: 100,
     errorSummary: null,
-    steps: stepsForCurrentStep("complete", "complete", getStepDetail("complete"))
+    steps: stepsForCurrentStep("synthesis", "complete")
   });
 }
 
