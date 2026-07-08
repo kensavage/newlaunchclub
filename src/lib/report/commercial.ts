@@ -94,7 +94,8 @@ export function createMemeConcepts({
       format: "Four-panel research journey",
       whyItWorks:
         "It makes the invisible AI-search problem visual: buyers are asking everywhere, but the brand needs source coverage to show up.",
-      provider: "memes.ai"
+      provider: "memes.ai",
+      imageUrl: null
     },
     {
       title: "Reddit Before Sales Calls",
@@ -102,7 +103,8 @@ export function createMemeConcepts({
       format: "Reaction meme",
       whyItWorks:
         "It turns a serious buyer-behavior insight into shareable creative that can open a sales conversation.",
-      provider: "memes.ai"
+      provider: "memes.ai",
+      imageUrl: null
     },
     {
       title: "AI Citation Glow-Up",
@@ -110,7 +112,8 @@ export function createMemeConcepts({
       format: "Before/after transformation",
       whyItWorks:
         "It previews the transformation the report is selling without promising guaranteed rankings or citations.",
-      provider: "memes.ai"
+      provider: "memes.ai",
+      imageUrl: null
     }
   ];
 }

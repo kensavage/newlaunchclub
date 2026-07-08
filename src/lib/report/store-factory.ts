@@ -10,6 +10,11 @@ export function getReportStore(): ReportStore {
 
   const env = getServerEnv();
 
+  if (env.REPORT_USE_MEMORY_STORE) {
+    store = new MemoryReportStore();
+    return store;
+  }
+
   if (hasSupabaseEnv(env) && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
     store = SupabaseReportStore.fromEnv({
       url: env.SUPABASE_URL,

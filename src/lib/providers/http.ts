@@ -20,8 +20,31 @@ export async function fetchJson<T>(
     }
 
     return json as T;
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(`Request to ${safeHostname(url)} timed out after ${timeoutMs}ms.`);
+    }
+
+    throw error;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function isAbortError(error: unknown) {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "name" in error &&
+      String(error.name) === "AbortError"
+  );
+}
+
+function safeHostname(url: string) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "provider";
   }
 }
 

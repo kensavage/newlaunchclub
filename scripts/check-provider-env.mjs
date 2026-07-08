@@ -45,6 +45,7 @@ for (const item of optionalProviderEnv) {
 console.log("Runtime switches");
 console.log(`  REPORT_USE_MOCK_PROVIDERS=${env.REPORT_USE_MOCK_PROVIDERS ?? "unset"}`);
 console.log(`  REPORT_USE_INLINE_WORKER=${env.REPORT_USE_INLINE_WORKER ?? "unset"}`);
+console.log(`  REPORT_USE_MEMORY_STORE=${env.REPORT_USE_MEMORY_STORE ?? "unset"}`);
 console.log(`  ENABLE_REAL_AI_CHECKS=${env.ENABLE_REAL_AI_CHECKS ?? "unset"}`);
 console.log(`  ENABLE_MEME_IMAGE_GENERATION=${env.ENABLE_MEME_IMAGE_GENERATION ?? "unset"}`);
 

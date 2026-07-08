@@ -15,7 +15,14 @@ interface FirecrawlResponse {
 
 interface FirecrawlSearchResponse {
   success?: boolean;
-  data?: Array<{
+  data?: FirecrawlSearchItem[] | {
+    web?: FirecrawlSearchItem[];
+    images?: unknown[];
+    news?: FirecrawlSearchItem[];
+  };
+}
+
+interface FirecrawlSearchItem {
     title?: string;
     url?: string;
     description?: string;
@@ -25,7 +32,6 @@ interface FirecrawlSearchResponse {
       description?: string;
       sourceURL?: string;
     };
-  }>;
 }
 
 export class FirecrawlProvider {
@@ -62,11 +68,11 @@ export class FirecrawlProvider {
   }
 
   async getSearchResults(queries: string[]): Promise<SearchResult[]> {
-    const batches = await Promise.all(
-      queries.slice(0, 10).map(async (query) => {
-        const response = await this.search(query, 5);
+    const batches = await this.searchMany(queries.slice(0, 6), 3);
 
-        return (response.data ?? []).map((item, index) => {
+    return batches
+      .flatMap(({ query, response }) =>
+        getSearchItems(response).map((item, index) => {
           const url = item.url ?? item.metadata?.sourceURL ?? "";
           const domain = safeDomain(url);
 
@@ -79,20 +85,21 @@ export class FirecrawlProvider {
             position: index + 1,
             isReddit: domain.includes("reddit.com")
           };
-        });
-      })
-    );
-
-    return batches.flat().filter((result) => result.url);
+        })
+      )
+      .filter((result) => result.url);
   }
 
   async getRedditEvidence({ queries }: { queries: string[] }): Promise<RedditEvidence[]> {
     const seen = new Set<string>();
-    const batches = await Promise.all(
-      queries.slice(0, 8).map(async (query) => {
-        const response = await this.search(`site:reddit.com/r ${query}`, 5);
+    const batches = await this.searchMany(
+      queries.slice(0, 6).map((query) => `site:reddit.com/r ${query}`),
+      3
+    );
 
-        return (response.data ?? []).flatMap((item): RedditEvidence[] => {
+    return batches
+      .flatMap(({ response }) =>
+        getSearchItems(response).flatMap((item): RedditEvidence[] => {
           const url = item.url ?? item.metadata?.sourceURL ?? "";
           if (!url || !safeDomain(url).includes("reddit.com") || seen.has(url)) {
             return [];
@@ -116,11 +123,20 @@ export class FirecrawlProvider {
               summary: summary.slice(0, 240)
             }
           ];
-        });
-      })
+        })
+      )
+      .slice(0, 10);
+  }
+
+  private async searchMany(queries: string[], limit: number) {
+    const settled = await Promise.allSettled(
+      queries.map(async (query) => ({
+        query,
+        response: await this.search(query, limit)
+      }))
     );
 
-    return batches.flat().slice(0, 10);
+    return settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
   }
 
   private search(query: string, limit: number) {
@@ -133,14 +149,9 @@ export class FirecrawlProvider {
       body: JSON.stringify({
         query,
         limit,
-        sources: ["web"],
-        scrapeOptions: {
-          formats: ["markdown"],
-          onlyMainContent: true,
-          maxAge: 172800000
-        }
+        sources: ["web"]
       }),
-      timeoutMs: 30_000
+      timeoutMs: 45_000
     });
   }
 }
@@ -156,4 +167,12 @@ function safeDomain(url: string) {
 function extractSubreddit(url: string) {
   const match = url.match(/\/r\/([^/]+)/i);
   return match?.[1] ? `r/${match[1]}` : null;
+}
+
+function getSearchItems(response: FirecrawlSearchResponse) {
+  if (Array.isArray(response.data)) {
+    return response.data;
+  }
+
+  return response.data?.web ?? [];
 }

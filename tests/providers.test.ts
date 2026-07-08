@@ -66,6 +66,55 @@ describe("provider adapters with mocked HTTP", () => {
     );
   });
 
+  it("maps Firecrawl v2 search responses into web and Reddit evidence", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            web: [
+              {
+                title: "Best AI visibility tools",
+                url: "https://example.com/ai-visibility",
+                description: "A comparison page."
+              },
+              {
+                title: "Reddit thread",
+                url: "https://www.reddit.com/r/SEO/comments/example/thread/",
+                description: "People compare tools."
+              }
+            ]
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            web: [
+              {
+                title: "What tools track AI mentions?",
+                url: "https://www.reddit.com/r/SEO/comments/example/tools/",
+                description: "A discussion about AI visibility tools."
+              }
+            ]
+          }
+        })
+      );
+
+    const provider = new FirecrawlProvider("fire-key");
+    const searchResults = await provider.getSearchResults(["ai visibility tools"]);
+    const redditEvidence = await provider.getRedditEvidence({ queries: ["ai mentions"] });
+
+    expect(searchResults).toHaveLength(2);
+    expect(searchResults[1]).toMatchObject({
+      domain: "www.reddit.com",
+      isReddit: true
+    });
+    expect(redditEvidence[0]).toMatchObject({
+      subreddit: "r/SEO",
+      title: "What tools track AI mentions?"
+    });
+  });
+
   it("maps DataForSEO keyword and SERP responses", async () => {
     fetchMock
       .mockResolvedValueOnce(

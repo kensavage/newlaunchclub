@@ -57,7 +57,10 @@ export class MemesProvider {
             ...concept,
             imageUrl
           }
-        : concept;
+        : {
+            ...concept,
+            imageUrl: concept.imageUrl ?? null
+          };
     });
   }
 }

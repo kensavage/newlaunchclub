@@ -60,7 +60,7 @@ export const redditOpportunitySchema = z.object({
 export const competitorGapSchema = z.object({
   competitor: z.string(),
   source: z.string(),
-  url: z.string().optional(),
+  url: z.string().nullable(),
   gap: z.string(),
   recommendedAction: z.string()
 });
@@ -87,7 +87,7 @@ export const memeConceptSchema = z.object({
   format: z.string(),
   whyItWorks: z.string(),
   provider: z.string(),
-  imageUrl: z.string().url().optional()
+  imageUrl: z.string().nullable()
 });
 
 export const pricingTierSchema = z.object({

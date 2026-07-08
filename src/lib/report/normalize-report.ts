@@ -30,7 +30,8 @@ export function normalizeOpportunityReportForResponse({
     Array.isArray(reportLike.memeConcepts) && reportLike.memeConcepts.length > 0
       ? reportLike.memeConcepts.map((concept) => ({
           ...concept,
-          provider: concept.provider || "memes.ai"
+          provider: concept.provider || "memes.ai",
+          imageUrl: concept.imageUrl ?? null
         }))
       : createMemeConcepts({
           companyName: reportLike.business.companyName,

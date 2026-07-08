@@ -25,6 +25,10 @@ interface ReportJobRow {
   expires_at: string;
 }
 
+interface ReportResultRelation {
+  report_json: OpportunityReport;
+}
+
 export class SupabaseReportStore implements ReportStore {
   constructor(private readonly supabase: SupabaseClient) {}
 
@@ -122,11 +126,19 @@ export class SupabaseReportStore implements ReportStore {
       .maybeSingle();
 
     if (error) throw new Error(error.message);
-    if (!data || !data.report_results?.[0]?.report_json) return null;
+    if (!data) return null;
+
+    const reportJson = getJoinedReportJson(
+      (data as ReportJobRow & {
+        report_results?: ReportResultRelation | ReportResultRelation[] | null;
+      }).report_results
+    );
+
+    if (!reportJson) return null;
 
     return {
       job: mapJobRow(data as ReportJobRow),
-      report: data.report_results[0].report_json as OpportunityReport
+      report: reportJson
     };
   }
 
@@ -145,6 +157,14 @@ export class SupabaseReportStore implements ReportStore {
 
     if (error) throw new Error(error.message);
   }
+}
+
+function getJoinedReportJson(reportResults?: ReportResultRelation | ReportResultRelation[] | null) {
+  if (Array.isArray(reportResults)) {
+    return reportResults[0]?.report_json ?? null;
+  }
+
+  return reportResults?.report_json ?? null;
 }
 
 function mapJobRow(row: ReportJobRow): ReportJob {

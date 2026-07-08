@@ -28,6 +28,7 @@ const serverEnvSchema = z.object({
   ENABLE_MEME_IMAGE_GENERATION: booleanStringSchema,
   REPORT_USE_MOCK_PROVIDERS: booleanStringSchema,
   REPORT_USE_INLINE_WORKER: booleanStringSchema,
+  REPORT_USE_MEMORY_STORE: booleanStringSchema,
   NEXT_PUBLIC_SITE_URL: z.string().url().default("http://localhost:3000"),
   NEXT_PUBLIC_BOOK_CALL_URL: z
     .string()

@@ -10,7 +10,8 @@ cp .env.example .env.local
 npm run dev
 ```
 
-The app can run locally with `REPORT_USE_MOCK_PROVIDERS=true` and `REPORT_USE_INLINE_WORKER=true`.
+The app can run locally with `REPORT_USE_MOCK_PROVIDERS=true`, `REPORT_USE_INLINE_WORKER=true`,
+and `REPORT_USE_MEMORY_STORE=true`.
 Production should configure real provider credentials, Supabase, and Netlify background functions.
 
 Set `NEXT_PUBLIC_BOOK_CALL_URL` to the call-booking page you want the report pricing table and final CTA to use.
