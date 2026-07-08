@@ -4,7 +4,7 @@ export const reportStepDefinitions: Array<{ id: ReportStepId; label: string }> =
   { id: "queued", label: "Queued report" },
   { id: "crawl", label: "Crawling website" },
   { id: "analysis", label: "Analyzing business" },
-  { id: "keywords", label: "Finding keywords and SERP opportunities" },
+  { id: "keywords", label: "Finding keywords and Google/Reddit opportunities" },
   { id: "reddit", label: "Researching Reddit discussions" },
   { id: "ai-search", label: "Mapping AI-search citation opportunities" },
   { id: "synthesis", label: "Building browser report" },

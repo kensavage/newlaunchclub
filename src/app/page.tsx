@@ -23,25 +23,6 @@ export default function HomePage() {
         </div>
         <ReportGenerator />
       </section>
-
-      <section className="proof-band" aria-label="Report signals">
-        <div>
-          <strong>20</strong>
-          <span>keywords checked</span>
-        </div>
-        <div>
-          <strong>10</strong>
-          <span>buyer searches mapped</span>
-        </div>
-        <div>
-          <strong>4</strong>
-          <span>AI-search prompts drafted</span>
-        </div>
-        <div>
-          <strong>1</strong>
-          <span>clear next move</span>
-        </div>
-      </section>
     </main>
   );
 }

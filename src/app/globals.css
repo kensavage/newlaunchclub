@@ -273,34 +273,6 @@ h1 {
   }
 }
 
-.proof-band {
-  width: min(1180px, calc(100% - 32px));
-  margin: 0 auto 40px;
-  border-top: 1px solid var(--lc-navy);
-  border-bottom: 1px solid var(--lc-navy);
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.proof-band div {
-  min-height: 112px;
-  padding: 20px;
-  border-right: 1px solid var(--lc-navy);
-  display: grid;
-  align-content: center;
-  gap: 4px;
-}
-
-.proof-band div:last-child {
-  border-right: 0;
-}
-
-.proof-band strong {
-  font-size: 34px;
-  line-height: 1;
-}
-
-.proof-band span,
 .report-footer p {
   color: var(--lc-muted);
   line-height: 1.45;
@@ -893,7 +865,6 @@ td strong {
   .grid.three,
   .story-steps,
   .pricing-grid,
-  .proof-band,
   .metric-strip {
     grid-template-columns: 1fr;
   }
@@ -913,13 +884,11 @@ td strong {
     font-size: 20px;
   }
 
-  .proof-band div,
   .metric-item {
     border-right: 0;
     border-bottom: 1px solid var(--lc-navy);
   }
 
-  .proof-band div:last-child,
   .metric-item:last-child {
     border-bottom: 0;
   }

@@ -77,7 +77,7 @@ export function ReportGenerator() {
         <SearchCheck size={24} aria-hidden="true" />
         <div>
           <h2>Generate your report</h2>
-          <p>No email required. Paste the site you want checked.</p>
+          <p>No email required. We&apos;ll scan the site and look for buyer keywords, Reddit conversations, and AI-search opportunities.</p>
         </div>
       </div>
 
