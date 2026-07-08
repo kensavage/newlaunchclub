@@ -1,10 +1,15 @@
 import { fetchJson } from "@/lib/providers/http";
-import type { CrawlResult, RedditEvidence, SearchResult } from "@/lib/providers/types";
+import type { CrawledPage, CrawlResult, RedditEvidence, SearchResult } from "@/lib/providers/types";
+
+const MAX_LINKED_PAGES = 6;
+const MAX_PAGE_TEXT_LENGTH = 5_000;
+const MAX_COMBINED_TEXT_LENGTH = 28_000;
 
 interface FirecrawlResponse {
   success?: boolean;
   data?: {
     markdown?: string;
+    links?: string[];
     metadata?: {
       title?: string;
       description?: string;
@@ -38,6 +43,38 @@ export class FirecrawlProvider {
   constructor(private readonly apiKey: string) {}
 
   async crawlWebsite(url: string): Promise<CrawlResult> {
+    const homepage = await this.scrapePage(url, { includeLinks: true });
+
+    if (!homepage.text) {
+      throw new Error("Firecrawl did not return readable main content.");
+    }
+
+    const linkedUrls = selectOneLevelUrls(homepage.links, url, MAX_LINKED_PAGES);
+    const linkedPages = await this.scrapeLinkedPages(linkedUrls);
+    const pages = [toCrawledPage(homepage), ...linkedPages];
+
+    return {
+      url: homepage.url,
+      title: homepage.title,
+      description: homepage.description,
+      text: buildCombinedCrawlText(pages),
+      pages
+    };
+  }
+
+  private async scrapeLinkedPages(urls: string[]) {
+    const settled = await Promise.allSettled(urls.map((url) => this.scrapePage(url)));
+
+    return settled.flatMap((result) => {
+      if (result.status !== "fulfilled" || !result.value.text) {
+        return [];
+      }
+
+      return [toCrawledPage(result.value)];
+    });
+  }
+
+  private async scrapePage(url: string, { includeLinks = false }: { includeLinks?: boolean } = {}) {
     const response = await fetchJson<FirecrawlResponse>("https://api.firecrawl.dev/v2/scrape", {
       method: "POST",
       headers: {
@@ -46,8 +83,8 @@ export class FirecrawlProvider {
       },
       body: JSON.stringify({
         url,
-        formats: ["markdown"],
-        onlyMainContent: true,
+        formats: includeLinks ? ["markdown", "links"] : ["markdown"],
+        onlyMainContent: !includeLinks,
         maxAge: 172800000
       }),
       timeoutMs: 30_000
@@ -55,15 +92,12 @@ export class FirecrawlProvider {
 
     const text = response.data?.markdown?.trim();
 
-    if (!text) {
-      throw new Error("Firecrawl did not return readable main content.");
-    }
-
     return {
       url: response.data?.metadata?.sourceURL ?? url,
       title: response.data?.metadata?.title ?? new URL(url).hostname,
       description: response.data?.metadata?.description,
-      text: text.slice(0, 18_000)
+      links: response.data?.links ?? [],
+      text: text?.slice(0, MAX_PAGE_TEXT_LENGTH) ?? ""
     };
   }
 
@@ -162,6 +196,133 @@ function safeDomain(url: string) {
   } catch {
     return "";
   }
+}
+
+function selectOneLevelUrls(links: string[], rootUrl: string, limit: number) {
+  const root = new URL(rootUrl);
+  const rootHost = normalizeHost(root.hostname);
+  const rootNormalized = normalizeUrlForCrawl(root);
+  const candidates = new Map<string, { url: string; score: number }>();
+
+  for (const link of links) {
+    const parsed = parseCandidateUrl(link, root);
+    if (!parsed) continue;
+    if (!["http:", "https:"].includes(parsed.protocol)) continue;
+    if (normalizeHost(parsed.hostname) !== rootHost) continue;
+
+    const normalized = normalizeUrlForCrawl(parsed);
+    if (normalized === rootNormalized || shouldSkipCrawlPath(parsed.pathname)) continue;
+
+    if (!candidates.has(normalized)) {
+      candidates.set(normalized, {
+        url: normalized,
+        score: scoreCrawlUrl(parsed)
+      });
+    }
+  }
+
+  return [...candidates.values()]
+    .sort((a, b) => b.score - a.score || a.url.length - b.url.length)
+    .slice(0, limit)
+    .map((candidate) => candidate.url);
+}
+
+function parseCandidateUrl(link: string, root: URL) {
+  try {
+    return new URL(link, root);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUrlForCrawl(url: URL) {
+  const normalized = new URL(url.toString());
+  normalized.hash = "";
+  normalized.search = "";
+  normalized.pathname = normalized.pathname.replace(/\/+$/, "") || "/";
+
+  return normalized.toString();
+}
+
+function normalizeHost(hostname: string) {
+  return hostname.replace(/^www\./i, "").toLowerCase();
+}
+
+function shouldSkipCrawlPath(pathname: string) {
+  const normalized = pathname.toLowerCase();
+
+  return (
+    /\.(avif|css|csv|docx?|gif|ico|jpe?g|js|json|mov|mp3|mp4|pdf|png|pptx?|svg|webp|xlsx?|zip)$/i.test(
+      normalized
+    ) ||
+    normalized.includes("/privacy") ||
+    normalized.includes("/terms") ||
+    normalized.includes("/login") ||
+    normalized.includes("/sign-in") ||
+    normalized.includes("/cart") ||
+    normalized.includes("/account")
+  );
+}
+
+function scoreCrawlUrl(url: URL) {
+  const path = url.pathname.toLowerCase();
+  const priorityTokens = [
+    "service",
+    "solution",
+    "product",
+    "feature",
+    "platform",
+    "about",
+    "pricing",
+    "case",
+    "customer",
+    "use-case",
+    "industry",
+    "work",
+    "how-it-works"
+  ];
+  const deprioritizedTokens = ["blog", "news", "press", "careers", "jobs", "contact"];
+  const priorityScore = priorityTokens.reduce(
+    (score, token) => score + (path.includes(token) ? 10 : 0),
+    0
+  );
+  const penalty = deprioritizedTokens.reduce(
+    (score, token) => score + (path.includes(token) ? 6 : 0),
+    0
+  );
+
+  return priorityScore - penalty - path.split("/").filter(Boolean).length;
+}
+
+function toCrawledPage(page: {
+  url: string;
+  title: string;
+  text: string;
+  description?: string;
+}): CrawledPage {
+  return {
+    url: page.url,
+    title: page.title,
+    description: page.description,
+    text: page.text
+  };
+}
+
+function buildCombinedCrawlText(pages: CrawledPage[]) {
+  const combined = pages
+    .map((page, index) =>
+      [
+        `Page ${index + 1}: ${page.title}`,
+        `URL: ${page.url}`,
+        page.description ? `Description: ${page.description}` : "",
+        page.text
+      ]
+        .filter(Boolean)
+        .join("\n")
+    )
+    .join("\n\n---\n\n");
+
+  return combined.slice(0, MAX_COMBINED_TEXT_LENGTH);
 }
 
 function extractSubreddit(url: string) {

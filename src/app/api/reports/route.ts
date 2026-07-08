@@ -12,6 +12,7 @@ import {
 } from "@/lib/report/rate-limit";
 import { getReportStore } from "@/lib/report/store-factory";
 import { createPublicId, sanitizeError } from "@/lib/report/store";
+import type { OpportunityReport } from "@/lib/report/schema";
 import { triggerReportWorker } from "@/lib/report/worker-client";
 
 export const runtime = "nodejs";
@@ -37,7 +38,7 @@ export async function POST(request: Request) {
     const store = getReportStore();
     const cached = await store.findRecentCompletedReportByDomain(normalized.domain);
 
-    if (cached) {
+    if (cached && hasOneLevelCrawlEvidence(cached.report)) {
       return NextResponse.json(
         {
           publicId: cached.job.publicId,
@@ -76,4 +77,8 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+}
+
+function hasOneLevelCrawlEvidence(report: OpportunityReport) {
+  return report.evidenceSummary.crawlSummary.startsWith("Crawled homepage +");
 }

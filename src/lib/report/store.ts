@@ -58,7 +58,7 @@ export function sanitizeError(error: unknown) {
 export function getStepDetail(step: ReportStepId) {
   const details: Record<ReportStepId, string> = {
     queued: "The report job is waiting to start.",
-    crawl: "Pulling the main page text so the report is grounded in the business.",
+    crawl: "Reading the homepage and same-domain pages linked from it so the report understands the business.",
     analysis: "Identifying the company, category, primary keyword, and buyer queries.",
     keywords: "Checking keyword demand and search-result surfaces.",
     reddit: "Looking for relevant discussions and subreddit opportunities.",

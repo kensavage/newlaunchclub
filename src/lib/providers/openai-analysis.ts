@@ -57,8 +57,9 @@ export class OpenAIAnalysisProvider {
             `Domain: ${domain}`,
             `Title: ${crawl.title}`,
             `Description: ${crawl.description ?? ""}`,
-            "Main page text:",
-            crawl.text.slice(0, 12000)
+            `Pages crawled: ${crawl.pages.map((page) => page.url).join(", ")}`,
+            "Combined site text from homepage and linked internal pages:",
+            crawl.text.slice(0, 24000)
           ].join("\n")
         }
       ],

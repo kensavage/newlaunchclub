@@ -10,6 +10,14 @@ export interface CrawlResult {
   title: string;
   text: string;
   description?: string;
+  pages: CrawledPage[];
+}
+
+export interface CrawledPage {
+  url: string;
+  title: string;
+  text: string;
+  description?: string;
 }
 
 export interface BusinessAnalysis {

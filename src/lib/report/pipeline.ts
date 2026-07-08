@@ -3,6 +3,7 @@ import { getServerEnv } from "@/lib/env";
 import { createProviderBundle } from "@/lib/providers";
 import type {
   AhrefsInsights,
+  CrawlResult,
   KeywordMetric,
   ProviderBundle,
   RedditEvidence,
@@ -42,8 +43,8 @@ export async function runReportJob(publicId: string, options: RunReportJobOption
     await setStep(store, job.publicId, "crawl");
     const crawl = await track(store, job, {
       provider: "Firecrawl",
-      endpoint: "scrape",
-      purpose: "Scrape submitted website main content",
+      endpoint: "scrape homepage + linked pages",
+      purpose: "Scrape submitted homepage and one level of same-domain linked pages",
       run: () => providers.crawlWebsite(job.normalizedUrl)
     });
 
@@ -147,6 +148,7 @@ export async function runReportJob(publicId: string, options: RunReportJobOption
         : report;
 
     const safeReport = normalizeReport(reportWithMemes, job, {
+      crawl,
       enableRealAiChecks: env.ENABLE_REAL_AI_CHECKS,
       bookingUrl: env.NEXT_PUBLIC_BOOK_CALL_URL
     });
@@ -269,9 +271,11 @@ function normalizeReport(
   report: OpportunityReport,
   job: ReportJob,
   {
+    crawl,
     enableRealAiChecks,
     bookingUrl
   }: {
+    crawl: CrawlResult;
     enableRealAiChecks: boolean;
     bookingUrl: string;
   }
@@ -282,11 +286,25 @@ function normalizeReport(
       publicId: job.publicId,
       submittedUrl: job.submittedUrl,
       domain: job.domain,
-      generatedAt: report.generatedAt || new Date().toISOString()
+      generatedAt: report.generatedAt || new Date().toISOString(),
+      evidenceSummary: {
+        ...report.evidenceSummary,
+        crawlSummary: createCrawlSummary(crawl)
+      }
     },
     bookingUrl,
     enableRealAiChecks
   });
+}
+
+function createCrawlSummary(crawl: CrawlResult) {
+  const linkedCount = Math.max(0, crawl.pages.length - 1);
+  const pageList = crawl.pages
+    .slice(0, 7)
+    .map((page) => page.url)
+    .join(", ");
+
+  return `Crawled homepage + ${linkedCount} linked internal page${linkedCount === 1 ? "" : "s"}: ${pageList}.`;
 }
 
 export function summarizeSearchResults(searchResults: SearchResult[]) {

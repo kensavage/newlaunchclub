@@ -56,7 +56,8 @@ describe("provider adapters with mocked HTTP", () => {
     const result = await new FirecrawlProvider("fire-key").crawlWebsite("https://launchclub.ai/");
 
     expect(result.title).toBe("Launch Club");
-    expect(result.text).toBe("Main page text");
+    expect(result.text).toContain("Main page text");
+    expect(result.pages).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.firecrawl.dev/v2/scrape",
       expect.objectContaining({
@@ -64,6 +65,61 @@ describe("provider adapters with mocked HTTP", () => {
         headers: expect.objectContaining({ Authorization: "Bearer fire-key" })
       })
     );
+  });
+
+  it("scrapes same-domain pages linked from the homepage one level deeper", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            markdown: "Home page text",
+            links: [
+              "https://launchclub.ai/services",
+              "https://launchclub.ai/about",
+              "https://launchclub.ai/privacy",
+              "https://example.com/not-us"
+            ],
+            metadata: {
+              title: "Launch Club",
+              sourceURL: "https://launchclub.ai/"
+            }
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            markdown: "About page text",
+            metadata: {
+              title: "About Launch Club",
+              sourceURL: "https://launchclub.ai/about"
+            }
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            markdown: "Services page text",
+            metadata: {
+              title: "Launch Club Services",
+              sourceURL: "https://launchclub.ai/services"
+            }
+          }
+        })
+      );
+
+    const result = await new FirecrawlProvider("fire-key").crawlWebsite("https://launchclub.ai/");
+
+    expect(result.pages.map((page) => page.url)).toEqual([
+      "https://launchclub.ai/",
+      "https://launchclub.ai/about",
+      "https://launchclub.ai/services"
+    ]);
+    expect(result.text).toContain("Home page text");
+    expect(result.text).toContain("About page text");
+    expect(result.text).toContain("Services page text");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("maps Firecrawl v2 search responses into web and Reddit evidence", async () => {
@@ -322,9 +378,22 @@ describe("provider adapters with mocked HTTP", () => {
     });
 
     const provider = new OpenAIAnalysisProvider("openai-key", "fast-model", "synthesis-model");
+    const crawl = {
+      url: "https://launchclub.ai/",
+      title: "Launch Club",
+      text: "Main text",
+      pages: [
+        {
+          url: "https://launchclub.ai/",
+          title: "Launch Club",
+          text: "Main text"
+        }
+      ]
+    };
+
     await expect(
       provider.analyzeBusiness({
-        crawl: { url: "https://launchclub.ai/", title: "Launch Club", text: "Main text" },
+        crawl,
         url: "https://launchclub.ai/",
         domain: "launchclub.ai"
       })
@@ -336,7 +405,7 @@ describe("provider adapters with mocked HTTP", () => {
         submittedUrl: "launchclub.ai",
         normalizedUrl: "https://launchclub.ai/",
         domain: "launchclub.ai",
-        crawl: { url: "https://launchclub.ai/", title: "Launch Club", text: "Main text" },
+        crawl,
         analysis,
         keywordMetrics: [],
         searchResults: [],

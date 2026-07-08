@@ -31,5 +31,6 @@ describe("report worker pipeline", () => {
     expect(parsedReport.aiCitationOpportunities).toHaveLength(4);
     expect(parsedReport.aiCitationOpportunities.every((item) => item.isSimulation)).toBe(true);
     expect(parsedReport.evidenceSummary.aiSearchSource).toMatch(/simulated opportunity/i);
+    expect(parsedReport.evidenceSummary.crawlSummary).toMatch(/homepage \+ 1 linked internal page/i);
   });
 });

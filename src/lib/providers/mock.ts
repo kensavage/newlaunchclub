@@ -27,11 +27,27 @@ export class MockProviderBundle implements ProviderBundle {
     const parsed = new URL(url);
     const companyName = titleCase(parsed.hostname.replace(/^www\./, "").split(".")[0] ?? "Company");
 
+    const pages = [
+      {
+        url,
+        title: `${companyName} - AI-powered growth platform`,
+        description: `${companyName} helps teams improve buyer visibility.`,
+        text: `${companyName} helps companies get discovered by buyers through AI search, Reddit conversations, comparison content, and category pages. The company works with growth teams that want more qualified pipeline and clearer proof.`
+      },
+      {
+        url: new URL("/services", url).toString(),
+        title: `${companyName} services`,
+        description: "Services for Reddit and AI-search visibility.",
+        text: `${companyName} offers Reddit opportunity research, comment strategy, comparison content, and AI-search visibility reporting.`
+      }
+    ];
+
     return {
       url,
-      title: `${companyName} - AI-powered growth platform`,
-      description: `${companyName} helps teams improve buyer visibility.`,
-      text: `${companyName} helps companies get discovered by buyers through AI search, Reddit conversations, comparison content, and category pages. The company works with growth teams that want more qualified pipeline and clearer proof.`
+      title: pages[0].title,
+      description: pages[0].description,
+      text: pages.map((page) => page.text).join("\n\n"),
+      pages
     };
   }
 
