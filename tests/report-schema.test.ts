@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { opportunityReportSchema, type OpportunityReport } from "@/lib/report/schema";
+import { normalizeOpportunityReportForResponse } from "@/lib/report/normalize-report";
 import {
   calculateOpportunityScore,
   getKeywordPriority,
@@ -136,5 +137,32 @@ describe("report schema, scoring, and AI opportunity labeling", () => {
     expect(score).toBeLessThanOrEqual(98);
     expect(getKeywordPriority(800, "High")).toBe("High");
     expect(isAiOpportunitySimulationEnabled(false)).toBe(true);
+  });
+
+  it("normalizes the final report to the deterministic Launch Club opportunity score", () => {
+    const expectedScore = calculateOpportunityScore({
+      keywordOpportunities: validReport.keywordOpportunities,
+      redditOpportunities: validReport.redditOpportunities,
+      competitorGaps: validReport.competitorGaps
+    });
+
+    const normalizedReport = normalizeOpportunityReportForResponse({
+      report: {
+        ...validReport,
+        opportunityScore: 1,
+        visibilitySnapshot: createVisibilitySnapshot({
+          opportunityScore: 1,
+          redditOpportunities: [],
+          keywordTraffic: 0
+        })
+      },
+      bookingUrl: validReport.bookingUrl,
+      enableRealAiChecks: false
+    });
+
+    expect(normalizedReport.opportunityScore).toBe(expectedScore);
+    expect(normalizedReport.visibilitySnapshot.targetAiVisibilityScore).toBeGreaterThan(
+      normalizedReport.visibilitySnapshot.currentAiVisibilityScore
+    );
   });
 });

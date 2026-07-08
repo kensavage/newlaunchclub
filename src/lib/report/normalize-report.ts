@@ -3,6 +3,7 @@ import {
   createVisibilitySnapshot,
   getDefaultPricingTiers
 } from "@/lib/report/commercial";
+import { calculateOpportunityScore } from "@/lib/report/scoring";
 import {
   opportunityReportSchema,
   type OpportunityReport,
@@ -22,6 +23,11 @@ export function normalizeOpportunityReportForResponse({
 }) {
   const reportLike = report as ReportLike;
   const redditOpportunities = normalizeRedditOpportunities(reportLike.redditOpportunities);
+  const opportunityScore = calculateOpportunityScore({
+    keywordOpportunities: reportLike.keywordOpportunities,
+    redditOpportunities,
+    competitorGaps: reportLike.competitorGaps
+  });
   const keywordTraffic = reportLike.keywordOpportunities.reduce(
     (sum, keyword) => sum + (keyword.trafficPotential ?? keyword.monthlySearchVolume ?? 0),
     0
@@ -41,13 +47,12 @@ export function normalizeOpportunityReportForResponse({
 
   return opportunityReportSchema.parse({
     ...reportLike,
-    visibilitySnapshot:
-      reportLike.visibilitySnapshot ??
-      createVisibilitySnapshot({
-        opportunityScore: reportLike.opportunityScore,
-        redditOpportunities,
-        keywordTraffic
-      }),
+    opportunityScore,
+    visibilitySnapshot: createVisibilitySnapshot({
+      opportunityScore,
+      redditOpportunities,
+      keywordTraffic
+    }),
     redditOpportunities,
     aiCitationOpportunities: reportLike.aiCitationOpportunities.map((opportunity) => ({
       ...opportunity,

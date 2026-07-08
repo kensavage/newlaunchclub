@@ -3,13 +3,19 @@ import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import {
   businessProfileSchema,
+  aiCitationOpportunitySchema,
+  competitorGapSchema,
+  keywordOpportunitySchema,
   opportunityReportSchema,
+  redditOpportunitySchema,
   type OpportunityReport
 } from "@/lib/report/schema";
 import {
   createMemeConcepts,
+  createVisibilitySnapshot,
   getDefaultPricingTiers
 } from "@/lib/report/commercial";
+import { calculateOpportunityScore } from "@/lib/report/scoring";
 import type { BusinessAnalysis, CrawlResult, ReportSynthesisInput } from "@/lib/providers/types";
 
 const businessAnalysisSchema = z.object({
@@ -20,6 +26,20 @@ const businessAnalysisSchema = z.object({
   redditQueries: z.array(z.string()).min(3).max(5),
   competitors: z.array(z.string()).min(3).max(6),
   summary: z.string()
+});
+
+const reportSynthesisSectionsSchema = z.object({
+  headline: z.string(),
+  keywordOpportunities: z.array(keywordOpportunitySchema).min(1).max(12),
+  redditOpportunities: z.array(redditOpportunitySchema).max(5),
+  competitorGaps: z.array(competitorGapSchema).max(5),
+  aiCitationOpportunities: z.array(aiCitationOpportunitySchema).length(4),
+  nextSteps: z.array(z.string()).min(1).max(6),
+  evidenceSummary: z.object({
+    keywordSource: z.string(),
+    redditSource: z.string(),
+    aiSearchSource: z.string()
+  })
 });
 
 export class OpenAIAnalysisProvider {
@@ -82,50 +102,40 @@ export class OpenAIAnalysisProvider {
         {
           role: "system",
           content:
-            "Create a visitor-safe Launch Club AI Search Opportunity Report. Be specific, avoid guarantees, and label simulated AI-search opportunities when real AI checks are not enabled."
+            "Create the visitor-facing opportunity sections for a Launch Club AI Search Opportunity Report. Be specific, avoid guarantees, and label simulated AI-search opportunities when real AI checks are not enabled. Do not create pricing, meme images, visibility scores, or an overall opportunity score; the app calculates those deterministically."
         },
         {
           role: "user",
           content: JSON.stringify(
             {
-              publicId: input.publicId,
-              submittedUrl: input.submittedUrl,
-              normalizedUrl: input.normalizedUrl,
               domain: input.domain,
               business: input.analysis.business,
-              keywords: input.keywordMetrics,
-              searchResults: input.searchResults.slice(0, 25),
-              ahrefs: input.ahrefs,
-              reddit: input.reddit,
+              keywords: input.keywordMetrics.slice(0, 16),
+              searchResults: input.searchResults.slice(0, 12),
+              ahrefs: {
+                domainTraffic: input.ahrefs.domainTraffic,
+                topPages: input.ahrefs.topPages.slice(0, 5),
+                organicCompetitors: input.ahrefs.organicCompetitors.slice(0, 5),
+                keywordMetrics: input.ahrefs.keywordMetrics.slice(0, 16)
+              },
+              reddit: input.reddit.slice(0, 5),
               enableRealAiChecks: input.enableRealAiChecks,
-              fixedPricingTiers: getDefaultPricingTiers(),
-              memeConceptExamples: createMemeConcepts({
-                companyName: input.analysis.business.companyName,
-                category: input.analysis.business.category,
-                primaryKeyword: input.analysis.primaryKeyword
-              }),
               requirements: {
                 keywordOpportunities: "Use 8 to 12 keyword opportunities.",
                 aiCitationOpportunities: "Return exactly 4. Set isSimulation to true unless enableRealAiChecks is true.",
                 redditOpportunities: "Use 2 to 5 Reddit opportunities based on provided evidence.",
                 redditTraffic:
                   "Include estimatedMonthlyViews, upvoteCount, commentCount, and engagementSummary for each Reddit opportunity. Treat score/comment data as directional engagement proxies, not official Reddit traffic.",
-                visibilitySnapshot:
-                  "Include current vs target AI visibility and Reddit presence scores that tell the before/after story.",
-                memeConcepts:
-                  "Return 2 to 4 memes.ai-ready meme concepts. Do not claim images were generated unless imageUrl is present.",
-                pricingTiers:
-                  "Use fixedPricingTiers exactly; do not invent prices. bookingUrl may be a placeholder and will be normalized by the app.",
+                deterministicFields:
+                  "Do not return opportunityScore, visibilitySnapshot, pricingTiers, memeConcepts, bookingUrl, publicId, submittedUrl, generatedAt, or domain.",
                 claims: "No guaranteed rankings, citations, traffic, or revenue."
               }
-            },
-            null,
-            2
+            }
           )
         }
       ],
       text: {
-        format: zodTextFormat(opportunityReportSchema, "ai_search_opportunity_report")
+        format: zodTextFormat(reportSynthesisSectionsSchema, "ai_search_opportunity_sections")
       }
     });
 
@@ -133,6 +143,49 @@ export class OpenAIAnalysisProvider {
       throw new Error("OpenAI did not return a valid report.");
     }
 
-    return response.output_parsed;
+    const sections = response.output_parsed;
+    const opportunityScore = calculateOpportunityScore({
+      keywordOpportunities: sections.keywordOpportunities,
+      redditOpportunities: sections.redditOpportunities,
+      competitorGaps: sections.competitorGaps
+    });
+    const keywordTraffic = sections.keywordOpportunities.reduce(
+      (sum, keyword) => sum + (keyword.trafficPotential ?? keyword.monthlySearchVolume ?? 0),
+      0
+    );
+
+    return opportunityReportSchema.parse({
+      publicId: input.publicId,
+      generatedAt: new Date().toISOString(),
+      submittedUrl: input.submittedUrl,
+      domain: input.domain,
+      opportunityScore,
+      headline: sections.headline,
+      business: input.analysis.business,
+      visibilitySnapshot: createVisibilitySnapshot({
+        opportunityScore,
+        redditOpportunities: sections.redditOpportunities,
+        keywordTraffic
+      }),
+      keywordOpportunities: sections.keywordOpportunities,
+      redditOpportunities: sections.redditOpportunities,
+      competitorGaps: sections.competitorGaps,
+      aiCitationOpportunities: sections.aiCitationOpportunities,
+      memeConcepts: createMemeConcepts({
+        companyName: input.analysis.business.companyName,
+        category: input.analysis.business.category,
+        primaryKeyword: input.analysis.primaryKeyword
+      }),
+      pricingTiers: getDefaultPricingTiers(),
+      bookingUrl: "mailto:hello@launchclub.ai?subject=Buyer%20Visibility%20Sprint",
+      nextSteps: sections.nextSteps,
+      evidenceSummary: {
+        crawlSummary: `Analyzed homepage and linked internal pages from ${input.normalizedUrl}.`,
+        keywordSource: sections.evidenceSummary.keywordSource,
+        redditSource: sections.evidenceSummary.redditSource,
+        aiSearchSource: sections.evidenceSummary.aiSearchSource,
+        generatedWithRealAiChecks: input.enableRealAiChecks
+      }
+    });
   }
 }
