@@ -20,9 +20,9 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: var(--lc-white);
-  color: var(--lc-navy);
-  font-family: Mont, Helvetica, Arial, sans-serif;
+  background: var(--lc-deep-navy);
+  color: var(--lc-white);
+  font-family: Inter, Helvetica, Arial, sans-serif;
   font-size: 16px;
   letter-spacing: 0;
 }
@@ -56,34 +56,41 @@ h1,
 h2,
 h3,
 strong {
-  font-family: Mont, Helvetica, Arial, sans-serif;
+  font-family: Inter, Helvetica, Arial, sans-serif;
 }
 
 .home-hero {
-  min-height: 88vh;
+  min-height: 100vh;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 520px);
   gap: clamp(28px, 5vw, 72px);
   align-items: center;
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 40px 0 28px;
+  padding: 40px 0 36px;
+  color: var(--lc-white);
 }
 
 .hero-copy {
   display: grid;
-  gap: 22px;
+  gap: 24px;
   align-content: center;
+}
+
+.hero-logo {
+  display: block;
+  width: 207px;
+  height: auto;
 }
 
 .eyebrow {
   width: fit-content;
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--lc-green);
+  border: 1px solid rgba(2, 233, 91, 0.5);
   border-radius: var(--radius);
-  background: var(--lc-green);
-  color: var(--lc-dark-green);
+  background: rgba(2, 233, 91, 0.12);
+  color: var(--lc-green);
   padding: 8px 10px;
   font-size: 12px;
   line-height: 1.2;
@@ -99,21 +106,26 @@ h1 {
   line-height: 1;
 }
 
+.home-hero h1 {
+  color: var(--lc-white);
+}
+
 .hero-lede {
   max-width: 760px;
-  color: var(--lc-ink);
+  color: rgba(255, 255, 255, 0.76);
   font-size: 20px;
   line-height: 1.55;
 }
 
 .generator-panel {
-  border: 1px solid var(--lc-navy);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius);
-  background: var(--lc-white);
+  background: rgba(255, 255, 255, 0.045);
   padding: clamp(20px, 4vw, 28px);
   display: grid;
   gap: 20px;
-  box-shadow: 8px 8px 0 var(--lc-green);
+  color: var(--lc-white);
+  box-shadow: none;
 }
 
 .generator-heading,
@@ -130,10 +142,18 @@ h1 {
   color: var(--lc-dark-green);
 }
 
+.home-hero .generator-heading svg {
+  color: var(--lc-green);
+}
+
 .generator-heading h2,
 .section-title h2 {
   font-size: 22px;
   line-height: 1.15;
+}
+
+.home-hero .generator-heading h2 {
+  color: var(--lc-white);
 }
 
 .generator-heading p,
@@ -143,12 +163,17 @@ h1 {
   line-height: 1.45;
 }
 
+.home-hero .generator-heading p {
+  color: rgba(255, 255, 255, 0.68);
+}
+
 .url-form {
   display: grid;
   gap: 10px;
 }
 
 .url-form label {
+  color: rgba(255, 255, 255, 0.74);
   font-size: 13px;
   font-weight: 800;
   text-transform: uppercase;
@@ -163,18 +188,28 @@ h1 {
 .url-row input {
   width: 100%;
   min-height: 52px;
-  border: 1px solid var(--lc-navy);
+  border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: var(--radius);
-  color: var(--lc-ink);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--lc-white);
   padding: 12px 14px;
+  outline: none;
+}
+
+.url-row input::placeholder {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.url-row input:focus {
+  border-color: var(--lc-green);
 }
 
 .button {
   min-height: 44px;
-  border: 1px solid var(--lc-navy);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: var(--radius);
-  background: var(--lc-white);
-  color: var(--lc-navy);
+  background: transparent;
+  color: var(--lc-white);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -183,6 +218,7 @@ h1 {
   font-weight: 850;
   line-height: 1.15;
   cursor: pointer;
+  box-shadow: none;
 }
 
 .button.primary {
@@ -197,7 +233,7 @@ h1 {
 }
 
 .error-text {
-  color: var(--lc-red);
+  color: #ffb4ab;
   font-weight: 750;
   line-height: 1.45;
 }
@@ -211,7 +247,7 @@ h1 {
   display: flex;
   align-items: center;
   gap: 12px;
-  color: var(--lc-muted);
+  color: rgba(255, 255, 255, 0.72);
   font-weight: 800;
 }
 
@@ -219,9 +255,9 @@ h1 {
   flex: 1;
   height: 10px;
   overflow: hidden;
-  border: 1px solid var(--lc-navy);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 999px;
-  background: var(--lc-soft);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .progress-bar div {
@@ -242,11 +278,11 @@ h1 {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
   gap: 10px;
-  color: var(--lc-muted);
+  color: rgba(255, 255, 255, 0.58);
 }
 
 .timeline-item strong {
-  color: var(--lc-navy);
+  color: rgba(255, 255, 255, 0.86);
 }
 
 .timeline-item p {
@@ -260,7 +296,7 @@ h1 {
 }
 
 .timeline-item.complete svg {
-  color: var(--lc-dark-green);
+  color: var(--lc-green);
 }
 
 .timeline-item.failed svg {

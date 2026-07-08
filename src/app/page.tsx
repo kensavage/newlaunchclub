@@ -7,6 +7,7 @@ export default function HomePage() {
       <section className="home-hero">
         <div className="hero-copy">
           <Image
+            className="hero-logo"
             src="/launch-club-logo.svg"
             alt="Launch Club"
             width={207}
