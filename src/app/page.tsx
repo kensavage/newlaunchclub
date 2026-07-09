@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Menu } from "lucide-react";
+import { HomeSections } from "@/components/home-sections";
 import { ReportGenerator } from "@/components/report-generator";
 
 export default function HomePage() {
@@ -83,6 +84,7 @@ export default function HomePage() {
           <ReportGenerator />
         </div>
       </section>
+      <HomeSections />
     </main>
   );
 }

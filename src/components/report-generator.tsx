@@ -6,13 +6,15 @@ import { type FormEvent, useEffect, useState } from "react";
 import { ProgressTimeline } from "@/components/progress-timeline";
 import type { ReportJob, ReportResponse } from "@/lib/report/schema";
 
-export function ReportGenerator() {
+export function ReportGenerator({ variant = "hero" }: { variant?: "hero" | "footer" }) {
   const router = useRouter();
   const [url, setUrl] = useState("");
   const [publicId, setPublicId] = useState<string | null>(null);
   const [job, setJob] = useState<ReportJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isFooter = variant === "footer";
+  const inputId = isFooter ? "footer-website-url" : "website-url";
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -72,30 +74,31 @@ export function ReportGenerator() {
 
   return (
     <section
-      className={`generator-panel${job ? " has-progress" : ""}`}
+      className={`generator-panel generator-panel-${variant}${job ? " has-progress" : ""}`}
+      id={isFooter ? "footer-report-generator" : "report-generator"}
       aria-label="Generate report"
     >
       <form className="url-form" onSubmit={onSubmit}>
-        <label className="sr-only" htmlFor="website-url">
-          Website URL
+        <label className="sr-only" htmlFor={inputId}>
+          {isFooter ? "Website address" : "Website URL"}
         </label>
         <div className="url-row">
           <input
-            id="website-url"
+            id={inputId}
             name="url"
-            placeholder="https://example.com"
+            placeholder={isFooter ? "Enter your website" : "https://example.com"}
             type="text"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
             required
           />
           <button
-            aria-label="Run report"
+            aria-label={isFooter ? "Get report" : "Run report"}
             className="button primary"
             disabled={isSubmitting}
             type="submit"
           >
-            <span>{isSubmitting ? "Starting..." : "Show Me How"}</span>
+            <span>{isSubmitting ? "Starting..." : isFooter ? "Get Report" : "Show Me How"}</span>
           </button>
         </div>
       </form>
