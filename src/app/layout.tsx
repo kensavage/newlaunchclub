@@ -1,5 +1,18 @@
 import type { Metadata } from "next";
+import { Caveat, Inter } from "next/font/google";
 import "./globals.css";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap"
+});
+
+const caveat = Caveat({
+  subsets: ["latin"],
+  variable: "--font-caveat",
+  display: "swap"
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://launchclub.ai"),
@@ -24,7 +37,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className={`${inter.variable} ${caveat.variable}`}>{children}</body>
     </html>
   );
 }

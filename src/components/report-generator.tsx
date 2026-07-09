@@ -1,6 +1,5 @@
 "use client";
 
-import { ArrowRight, SearchCheck } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
@@ -72,30 +71,31 @@ export function ReportGenerator() {
   }, [publicId, router]);
 
   return (
-    <section className="generator-panel" aria-label="Generate report">
-      <div className="generator-heading">
-        <SearchCheck size={24} aria-hidden="true" />
-        <div>
-          <h2>Generate your report</h2>
-          <p>No email required. We&apos;ll scan the site and look for buyer keywords, Reddit conversations, and AI-search opportunities.</p>
-        </div>
-      </div>
-
+    <section
+      className={`generator-panel${job ? " has-progress" : ""}`}
+      aria-label="Generate report"
+    >
       <form className="url-form" onSubmit={onSubmit}>
-        <label htmlFor="website-url">Website URL</label>
+        <label className="sr-only" htmlFor="website-url">
+          Website URL
+        </label>
         <div className="url-row">
           <input
             id="website-url"
             name="url"
-            placeholder="launchclub.ai"
+            placeholder="https://example.com"
             type="text"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
             required
           />
-          <button className="button primary" disabled={isSubmitting} type="submit">
-            <span>{isSubmitting ? "Starting" : "Run report"}</span>
-            <ArrowRight size={18} aria-hidden="true" />
+          <button
+            aria-label="Run report"
+            className="button primary"
+            disabled={isSubmitting}
+            type="submit"
+          >
+            <span>{isSubmitting ? "Starting..." : "Show Me How"}</span>
           </button>
         </div>
       </form>

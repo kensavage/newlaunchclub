@@ -22,7 +22,7 @@ body {
   min-height: 100%;
   background: var(--lc-deep-navy);
   color: var(--lc-white);
-  font-family: Inter, Helvetica, Arial, sans-serif;
+  font-family: var(--font-inter), Inter, Helvetica, Arial, sans-serif;
   font-size: 16px;
   letter-spacing: 0;
 }
@@ -56,46 +56,7 @@ h1,
 h2,
 h3,
 strong {
-  font-family: Inter, Helvetica, Arial, sans-serif;
-}
-
-.home-hero {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 520px);
-  gap: clamp(28px, 5vw, 72px);
-  align-items: center;
-  width: min(1180px, calc(100% - 32px));
-  margin: 0 auto;
-  padding: 40px 0 36px;
-  color: var(--lc-white);
-}
-
-.hero-copy {
-  display: grid;
-  gap: 24px;
-  align-content: center;
-}
-
-.hero-logo {
-  display: block;
-  width: 207px;
-  height: auto;
-}
-
-.eyebrow {
-  width: fit-content;
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid rgba(2, 233, 91, 0.5);
-  border-radius: var(--radius);
-  background: rgba(2, 233, 91, 0.12);
-  color: var(--lc-green);
-  padding: 8px 10px;
-  font-size: 12px;
-  line-height: 1.2;
-  font-weight: 800;
-  text-transform: uppercase;
+  font-family: var(--font-inter), Inter, Helvetica, Arial, sans-serif;
 }
 
 h1 {
@@ -106,102 +67,249 @@ h1 {
   line-height: 1;
 }
 
-.home-hero h1 {
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.legacy-home {
+  min-height: 100vh;
+  overflow-x: hidden;
+  background: var(--lc-deep-navy);
+}
+
+.legacy-hero {
+  position: relative;
+  min-height: calc(100vh - 8px);
+  margin: 8px;
   color: var(--lc-white);
 }
 
-.hero-lede {
-  max-width: 760px;
-  color: rgba(255, 255, 255, 0.76);
-  font-size: 20px;
-  line-height: 1.55;
+.legacy-hero-backdrop {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 781px;
+  background-color: var(--lc-deep-navy);
+  background-image: url("/launchclub-hero-desktop.webp");
+  background-position: 50% 0;
+  background-repeat: no-repeat;
+  background-size: 100% 91%;
+  pointer-events: none;
+}
+
+.legacy-site-header {
+  position: fixed;
+  z-index: 20;
+  top: 20px;
+  left: 50%;
+  width: min(1119px, calc(100% - 40px));
+  height: 80px;
+  padding: 16px 22px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.legacy-logo {
+  display: flex;
+  width: 207px;
+  height: 32px;
+  align-items: center;
+}
+
+.legacy-logo img {
+  display: block;
+  width: 207px;
+  height: 32px;
+}
+
+.legacy-desktop-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 42px;
+  font-size: 14px;
+}
+
+.legacy-desktop-nav > a:first-child {
+  color: var(--lc-white);
+}
+
+.legacy-access-link {
+  min-width: 234px;
+  min-height: 48px;
+  border: 1px solid var(--lc-green);
+  border-radius: var(--radius);
+  background: var(--lc-green);
+  color: var(--lc-dark-green);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 19px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.legacy-mobile-nav {
+  display: none;
+}
+
+.legacy-hero-inner {
+  position: relative;
+  z-index: 1;
+  width: min(801px, 100%);
+  margin: 0 auto;
+  padding: 150px 0 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.legacy-kicker {
+  color: var(--lc-white);
+  font-family: var(--font-caveat), Caveat, cursive;
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 42px;
+}
+
+.legacy-hero-art {
+  position: relative;
+  flex: 0 0 auto;
+  width: 801px;
+  height: 324px;
+  margin-top: 52px;
+}
+
+.legacy-card {
+  position: absolute;
+  display: block;
+  height: auto;
+}
+
+.legacy-card-search {
+  top: 23px;
+  left: 10px;
+  width: 243px;
+  height: 243px;
+  transform: rotate(-12deg);
+}
+
+.legacy-card-reddit {
+  top: 0;
+  left: 243px;
+  width: 279px;
+  height: 285px;
+  transform: rotate(15deg);
+}
+
+.legacy-card-launch {
+  top: 39px;
+  left: 512px;
+  width: 279px;
+  height: 285px;
+  transform: rotate(-15deg);
+}
+
+.legacy-cards-mobile {
+  display: none;
+}
+
+.legacy-home .legacy-headline {
+  width: 100%;
+  max-width: 801px;
+  margin-top: -10px;
+  color: var(--lc-white);
+  font-size: 52px;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.legacy-headline strong {
+  color: #00ff00;
+  font-weight: 700;
 }
 
 .generator-panel {
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.045);
-  padding: clamp(20px, 4vw, 28px);
+  width: 585px;
+  margin-top: 20px;
   display: grid;
-  gap: 20px;
+  gap: 16px;
   color: var(--lc-white);
-  box-shadow: none;
 }
 
-.generator-heading,
 .section-title {
   display: flex;
   gap: 12px;
   align-items: flex-start;
 }
 
-.generator-heading svg,
 .section-title svg,
 .metric-item svg {
   flex: 0 0 auto;
   color: var(--lc-dark-green);
 }
 
-.home-hero .generator-heading svg {
-  color: var(--lc-green);
-}
-
-.generator-heading h2,
 .section-title h2 {
   font-size: 22px;
   line-height: 1.15;
 }
 
-.home-hero .generator-heading h2 {
-  color: var(--lc-white);
-}
-
-.generator-heading p,
 .section-title p {
   margin-top: 6px;
   color: var(--lc-muted);
   line-height: 1.45;
 }
 
-.home-hero .generator-heading p {
-  color: rgba(255, 255, 255, 0.68);
-}
-
 .url-form {
-  display: grid;
-  gap: 10px;
-}
-
-.url-form label {
-  color: rgba(255, 255, 255, 0.74);
-  font-size: 13px;
-  font-weight: 800;
-  text-transform: uppercase;
+  width: 100%;
+  border: 3px solid transparent;
+  border-radius: 12px;
+  background: var(--lc-white);
+  padding: 12px;
 }
 
 .url-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 149px;
+  gap: 129px;
+  align-items: center;
 }
 
 .url-row input {
   width: 100%;
-  min-height: 52px;
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--lc-white);
-  padding: 12px 14px;
+  min-width: 0;
+  min-height: 48px;
+  border: 0;
+  border-radius: 0 20px 20px 0;
+  background: transparent;
+  color: var(--lc-ink);
+  padding: 8px 12px;
   outline: none;
+  font-size: 18px;
+  font-weight: 400;
 }
 
 .url-row input::placeholder {
-  color: rgba(255, 255, 255, 0.42);
+  color: rgba(11, 14, 24, 0.46);
 }
 
 .url-row input:focus {
-  border-color: var(--lc-green);
+  outline: 2px solid var(--lc-green);
+  outline-offset: 1px;
 }
 
 .button {
@@ -219,6 +327,15 @@ h1 {
   line-height: 1.15;
   cursor: pointer;
   box-shadow: none;
+}
+
+.legacy-home .url-row .button {
+  min-height: 48px;
+  padding: 0 12px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .button.primary {
@@ -239,8 +356,16 @@ h1 {
 }
 
 .progress-panel {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 20px;
   display: grid;
   gap: 14px;
+  text-align: left;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .progress-header {
@@ -1669,5 +1794,169 @@ td strong {
 
   .testimonial-card {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 920px) and (min-width: 701px) {
+  .legacy-site-header {
+    width: calc(100% - 40px);
+  }
+
+  .legacy-hero-inner {
+    width: min(760px, calc(100% - 32px));
+  }
+
+  .legacy-hero-art {
+    transform: scale(0.88);
+    margin-top: -2px;
+    margin-bottom: -46px;
+  }
+
+  .legacy-home .legacy-headline {
+    font-size: 46px;
+  }
+}
+
+@media (max-width: 700px) {
+  .legacy-hero {
+    min-height: calc(100vh - 8px);
+    margin: 8px 0 0;
+  }
+
+  .legacy-hero-backdrop {
+    height: 739px;
+    background-image: url("/launchclub-hero-mobile.avif");
+    background-position: 50% 0;
+    background-size: 98% 81%;
+  }
+
+  .legacy-site-header {
+    top: 0;
+    width: 100%;
+    height: 80px;
+    padding: 0 31px 0 22px;
+    border-radius: 0;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .legacy-logo {
+    visibility: hidden;
+  }
+
+  .legacy-desktop-nav {
+    display: none;
+  }
+
+  .legacy-mobile-nav {
+    position: relative;
+    margin-left: auto;
+    display: block;
+    color: var(--lc-white);
+  }
+
+  .legacy-mobile-nav summary {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .legacy-mobile-nav summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .legacy-mobile-nav nav {
+    position: absolute;
+    top: 40px;
+    right: 0;
+    width: 210px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius);
+    background: var(--lc-deep-navy);
+    padding: 8px;
+    display: grid;
+    gap: 4px;
+  }
+
+  .legacy-mobile-nav nav a {
+    border-radius: var(--radius);
+    padding: 12px;
+    text-align: left;
+  }
+
+  .legacy-mobile-nav nav a:last-child {
+    background: var(--lc-green);
+    color: var(--lc-dark-green);
+  }
+
+  .legacy-hero-inner {
+    width: 100%;
+    padding: 120px 0 32px;
+  }
+
+  .legacy-kicker {
+    font-size: 28px;
+    line-height: 42px;
+  }
+
+  .legacy-hero-art {
+    width: 100%;
+    height: 212px;
+    margin-top: 32px;
+  }
+
+  .legacy-card {
+    display: none;
+  }
+
+  .legacy-cards-mobile {
+    display: block;
+    width: 100%;
+    height: 212px;
+    object-fit: contain;
+  }
+
+  .legacy-home .legacy-headline {
+    width: 100%;
+    margin-top: -20px;
+    padding: 10px 8px 0;
+    font-size: 32px;
+    line-height: 1.2;
+  }
+
+  .legacy-home .generator-panel {
+    width: 100%;
+    margin-top: 60px;
+  }
+
+  .legacy-home .url-form {
+    border: 0;
+    background: transparent;
+    padding: 15px;
+  }
+
+  .legacy-home .url-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .legacy-home .url-row input {
+    min-height: 48px;
+    border-radius: var(--radius);
+    background: var(--lc-white);
+    padding: 8px 13px;
+  }
+
+  .legacy-home .url-row .button {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .legacy-home .progress-panel,
+  .legacy-home .error-text {
+    width: calc(100% - 30px);
+    margin: 0 15px;
   }
 }
