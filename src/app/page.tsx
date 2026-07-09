@@ -40,7 +40,7 @@ export default function HomePage() {
         </header>
 
         <div className="legacy-hero-inner">
-          <p className="legacy-kicker">Launch Club - Reddit Marketing</p>
+          <h1 className="legacy-kicker">Launch Club - Reddit Marketing</h1>
 
           <div className="legacy-hero-art" aria-hidden="true">
             <Image
@@ -77,9 +77,9 @@ export default function HomePage() {
             />
           </div>
 
-          <h1 className="legacy-headline">
+          <h2 className="legacy-headline">
             See Where Reddit Is Talking To Your Prospects <strong>Without You</strong>
-          </h1>
+          </h2>
 
           <ReportGenerator />
         </div>
