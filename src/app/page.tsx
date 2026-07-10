@@ -1,8 +1,7 @@
 import Image from "next/image";
-import Link from "next/link";
-import { Menu } from "lucide-react";
 import { HomeSections } from "@/components/home-sections";
 import { ReportGenerator } from "@/components/report-generator";
+import { SiteHeader } from "@/components/site-header";
 
 export default function HomePage() {
   return (
@@ -10,34 +9,7 @@ export default function HomePage() {
       <section className="legacy-hero">
         <div className="legacy-hero-backdrop" aria-hidden="true" />
 
-        <header className="legacy-site-header">
-          <Link className="legacy-logo" href="/" aria-label="Launch Club home">
-            <Image
-              src="/launch-club-logo.svg"
-              alt="Launch Club"
-              width={207}
-              height={32}
-              priority
-            />
-          </Link>
-
-          <nav className="legacy-desktop-nav" aria-label="Primary navigation">
-            <a href="https://launchclub.ai/watch-demo">Watch a demo</a>
-            <a className="legacy-access-link" href="https://launchclub.ai/pricing">
-              Access LaunchClub
-            </a>
-          </nav>
-
-          <details className="legacy-mobile-nav">
-            <summary aria-label="Open navigation">
-              <Menu size={27} aria-hidden="true" />
-            </summary>
-            <nav aria-label="Mobile navigation">
-              <a href="https://launchclub.ai/watch-demo">Watch a demo</a>
-              <a href="https://launchclub.ai/pricing">Access LaunchClub</a>
-            </nav>
-          </details>
-        </header>
+        <SiteHeader />
 
         <div className="legacy-hero-inner">
           <h1 className="legacy-kicker">Launch Club - Reddit Marketing</h1>

@@ -1,6 +1,7 @@
 import Image from "next/image";
 import { ChevronDown, Play } from "lucide-react";
 import { ReportGenerator } from "@/components/report-generator";
+import { SiteFooter } from "@/components/site-footer";
 
 type ProcessStep = {
   className: string;
@@ -353,7 +354,7 @@ export function HomeSections() {
 
           <a
             className="legacy-video-testimonial"
-            href="https://launchclub.ai/watch-demo"
+            href="/watch-demo"
             aria-label="Watch Ken Savage's Launch Club testimonial"
           >
             <div className="legacy-testimonial-person">
@@ -473,32 +474,7 @@ export function HomeSections() {
         </div>
       </section>
 
-      <footer className="legacy-home-footer">
-        <Image src="/launch-club-logo.svg" alt="Launch Club" width={207} height={32} />
-        <nav className="legacy-footer-nav" aria-label="Footer navigation">
-          <a href="https://launchclub.ai/pricing">Pricing</a>
-          <a href="https://launchclub.ai/about">About</a>
-          <a href="https://launchclub.ai/contact">Contact</a>
-          <a href="https://launchclub.ai/watch-demo">Watch a Demo</a>
-          <a href="https://launchclub.ai/blog">Reddit Secrets</a>
-          <a href="https://launchclub.ai/reddit-scraper">Reddit Scraper</a>
-          <a href="https://launchclub.ai/intel">Reddit Intelligence Report</a>
-          <a href="https://launchclub.ai/case-studies">Reddit Marketing Case Studies</a>
-          <a href="https://launchclub.ai/terms_and_privacy">Terms of Use</a>
-          <a href="https://launchclub.ai/terms_and_privacy">Privacy Policy</a>
-        </nav>
-        <div className="legacy-footer-socials">
-          <a href="https://www.linkedin.com/company/launchclub/" aria-label="Launch Club on LinkedIn">
-            <Image src="/legacy/social-linkedin.avif" alt="" width={32} height={32} />
-          </a>
-          <a href="https://x.com/launchclub" aria-label="Launch Club on X">
-            <Image src="/legacy/social-x.avif" alt="" width={32} height={32} />
-          </a>
-        </div>
-        <a className="legacy-footer-phone" href="tel:+19785176724">
-          Call me +1 978-517-6724
-        </a>
-      </footer>
+      <SiteFooter />
     </>
   );
 }

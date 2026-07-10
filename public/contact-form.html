@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Launch Club contact form</title>
+  </head>
+  <body>
+    <form
+      name="launchclub-contact"
+      method="POST"
+      action="/contact?submitted=1"
+      data-netlify="true"
+      enctype="multipart/form-data"
+      hidden
+    >
+      <input type="hidden" name="form-name" value="launchclub-contact" />
+      <input type="text" name="first-name" />
+      <input type="text" name="last-name" />
+      <input type="email" name="email" />
+      <input type="tel" name="phone" />
+      <textarea name="message"></textarea>
+      <input type="file" name="attachment" />
+    </form>
+  </body>
+</html>
