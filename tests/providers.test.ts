@@ -373,9 +373,53 @@ describe("provider adapters with mocked HTTP", () => {
       }
     };
 
-    openAiParseMock.mockResolvedValueOnce({ output_parsed: analysis }).mockResolvedValueOnce({
-      output_parsed: report
-    });
+    openAiParseMock
+      .mockResolvedValueOnce({ output_parsed: analysis })
+      .mockResolvedValueOnce({
+        output_parsed: {
+          keywordOpportunities: [
+            {
+              keywordIndex: 0,
+              intent: "Discovery",
+              sourceVisibility: "Competitors are more visible.",
+              redditFit: "High",
+              recommendedAction: "Publish a useful answer page."
+            }
+          ],
+          competitorGaps: [
+            {
+              sourceIndex: 0,
+              gap: "The competitor has stronger source coverage.",
+              recommendedAction: "Publish a focused comparison."
+            }
+          ]
+        }
+      })
+      .mockResolvedValueOnce({
+        output_parsed: {
+          redditOpportunities: [
+            {
+              evidenceIndex: 0,
+              whyLowHangingFruit: "The thread already contains a direct buyer question.",
+              suggestedPostTitle: "Share a practical measurement framework",
+              suggestedPostBody:
+                "A useful way to approach this is to separate direct brand mentions from the sources that make those mentions possible. We have found that comparison pages, clear proof, and genuinely useful Reddit participation work best together. I would start by tracking a small set of buyer questions, noting which sources appear in the answers, and then improving the missing source material instead of trying to force a mention. That keeps the work measurable and avoids turning community participation into an ad. Has anyone compared how quickly different source types begin influencing the answers?",
+              riskLevel: "Low"
+            }
+          ]
+        }
+      })
+      .mockResolvedValueOnce({
+        output_parsed: {
+          headline: report.headline,
+          aiCitationOpportunities: report.aiCitationOpportunities.map((opportunity) => ({
+            prompt: opportunity.prompt,
+            sampleAnswer: opportunity.sampleAnswer,
+            citationAngle: opportunity.citationAngle
+          })),
+          nextSteps: report.nextSteps
+        }
+      });
 
     const provider = new OpenAIAnalysisProvider("openai-key", "fast-model", "synthesis-model");
     const crawl = {
@@ -407,17 +451,54 @@ describe("provider adapters with mocked HTTP", () => {
         domain: "launchclub.ai",
         crawl,
         analysis,
-        keywordMetrics: [],
+        keywordMetrics: [
+          {
+            keyword: "AI search visibility",
+            monthlySearchVolume: 700,
+            difficulty: 21,
+            trafficPotential: 1400,
+            intent: "Discovery"
+          }
+        ],
         searchResults: [],
         ahrefs: {
           domainTraffic: null,
           topPages: [],
-          organicCompetitors: [],
+          organicCompetitors: [
+            { name: "Competitor", domain: "competitor.example", traffic: 1200 }
+          ],
           keywordMetrics: []
         },
-        reddit: [],
+        reddit: [
+          {
+            title: "How do companies measure AI visibility?",
+            subreddit: "r/SEO",
+            url: "https://www.reddit.com/r/SEO/comments/example/",
+            score: 21,
+            comments: 8,
+            summary: "People are comparing practical measurement approaches."
+          }
+        ],
         enableRealAiChecks: false
       })
-    ).resolves.toMatchObject({ publicId: "openai-report" });
+    ).resolves.toMatchObject({
+      publicId: "openai-report",
+      keywordOpportunities: [
+        expect.objectContaining({
+          keyword: "AI search visibility",
+          monthlySearchVolume: 700
+        })
+      ],
+      redditOpportunities: [
+        expect.objectContaining({
+          title: "How do companies measure AI visibility?",
+          upvoteCount: 21,
+          commentCount: 8
+        })
+      ]
+    });
+
+    expect(openAiParseMock).toHaveBeenCalledTimes(4);
+    expect(openAiParseMock.mock.calls.slice(1).every(([request]) => request.reasoning?.effort === "none")).toBe(true);
   });
 });

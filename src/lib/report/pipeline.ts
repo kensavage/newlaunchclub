@@ -57,7 +57,17 @@ export async function runReportJob(publicId: string, options: RunReportJobOption
     });
 
     await setStep(store, job.publicId, "keywords");
-    const [ahrefsKeywordMetrics, searchResults, ahrefs] = await Promise.all([
+    const redditPromise = track(store, job, {
+      provider: "Firecrawl",
+      endpoint: "search site:reddit.com",
+      purpose: "Find relevant public Reddit post and subreddit evidence",
+      run: () =>
+        providers.getRedditEvidence({
+          queries: analysis.redditQueries,
+          category: analysis.business.category
+        })
+    });
+    const marketResearchPromise = Promise.all([
       track(store, job, {
         provider: "Ahrefs",
         endpoint: "keywords-explorer/overview",
@@ -79,23 +89,16 @@ export async function runReportJob(publicId: string, options: RunReportJobOption
             domain: job.domain,
             normalizedUrl: job.normalizedUrl,
             keywords: analysis.keywords
-        })
+          })
       })
+    ]);
+    const [[ahrefsKeywordMetrics, searchResults, ahrefs], reddit] = await Promise.all([
+      marketResearchPromise,
+      redditPromise
     ]);
     const keywordMetrics = mergeKeywordMetrics(analysis.keywords, ahrefsKeywordMetrics, ahrefs);
 
     await setStep(store, job.publicId, "reddit");
-    const reddit = await track(store, job, {
-      provider: "Firecrawl",
-      endpoint: "search site:reddit.com",
-      purpose: "Find relevant public Reddit post and subreddit evidence",
-      run: () =>
-        providers.getRedditEvidence({
-          queries: analysis.redditQueries,
-          category: analysis.business.category
-        })
-    });
-
     await setStep(store, job.publicId, "ai-search");
     await store.recordVendorEvent({
       publicId: job.publicId,

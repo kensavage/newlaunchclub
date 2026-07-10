@@ -39,4 +39,39 @@ describe("report worker pipeline", () => {
     expect(parsedReport.evidenceSummary.aiSearchSource).toMatch(/simulated opportunity/i);
     expect(parsedReport.evidenceSummary.crawlSummary).toMatch(/homepage \+ 1 linked internal page/i);
   });
+
+  it("runs Reddit discovery concurrently with keyword and market research", async () => {
+    class ConcurrentResearchProviders extends MockProviderBundle {
+      redditStartedAt = 0;
+      keywordFinishedAt = 0;
+
+      override async getKeywordMetrics(keywords: string[]) {
+        const metrics = await super.getKeywordMetrics(keywords);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        this.keywordFinishedAt = performance.now();
+        return metrics;
+      }
+
+      override async getRedditEvidence() {
+        this.redditStartedAt = performance.now();
+        return super.getRedditEvidence();
+      }
+    }
+
+    const store = new MemoryReportStore();
+    const providers = new ConcurrentResearchProviders();
+    const job = await store.createJob({
+      publicId: "parallel-research-test",
+      submittedUrl: "launchclub.ai",
+      normalizedUrl: "https://launchclub.ai/",
+      domain: "launchclub.ai",
+      visitorHash: "visitor-hash"
+    });
+
+    await runReportJob(job.publicId, { store, providers });
+
+    expect(providers.redditStartedAt).toBeGreaterThan(0);
+    expect(providers.keywordFinishedAt).toBeGreaterThan(0);
+    expect(providers.redditStartedAt).toBeLessThan(providers.keywordFinishedAt);
+  });
 });

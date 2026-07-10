@@ -19,7 +19,7 @@ export async function GET(
     return NextResponse.json({ error: "Report not found." }, { status: 404 });
   }
 
-  const storedReport = await store.getReport(publicId);
+  const storedReport = job.status === "complete" ? await store.getReport(publicId) : null;
   const report = storedReport
     ? normalizeOpportunityReportForResponse({
         report: storedReport,
