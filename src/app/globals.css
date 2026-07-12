@@ -3214,6 +3214,119 @@ td strong {
   line-height: 0.9;
 }
 
+.hero-stat .evidence-badge {
+  font-size: 11px;
+}
+
+.evidence-contract {
+  display: grid;
+  gap: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius);
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.evidence-contract h2 {
+  margin-top: 10px;
+  color: var(--lc-white);
+  font-size: clamp(28px, 4vw, 42px);
+}
+
+.evidence-legend {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.evidence-legend > div {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.evidence-legend p {
+  color: var(--lc-white);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.evidence-badge {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border: 1px solid var(--lc-white);
+  border-radius: var(--radius);
+  background: var(--lc-white);
+  color: var(--lc-navy);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.evidence-measured {
+  border-color: var(--lc-green);
+  background: var(--lc-green);
+  color: var(--lc-dark-green);
+}
+
+.keyword-table .evidence-badge,
+.reddit-post-card .evidence-badge,
+.traffic-stat-card .evidence-badge,
+.competitor-board .evidence-badge,
+.comment-card .evidence-badge,
+.ai-opportunity-card .evidence-badge,
+.report-claim .evidence-badge {
+  border-color: var(--lc-navy);
+}
+
+.report-claim-list {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius);
+  background: var(--lc-white);
+  color: var(--lc-navy);
+}
+
+.report-claim {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border-top: 1px solid var(--lc-line);
+}
+
+.report-claim:first-child {
+  border-top: 0;
+}
+
+.report-claim p {
+  line-height: 1.4;
+}
+
+.report-claim small {
+  display: block;
+  margin-top: 5px;
+  color: var(--lc-muted);
+  line-height: 1.35;
+}
+
+.evidence-source-links,
+.competitor-evidence-row > a {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--lc-navy);
+  font-size: 13px;
+  font-weight: 900;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .report-section {
   display: grid;
   gap: 18px;
@@ -3267,7 +3380,7 @@ td strong {
 .keyword-table-head,
 .keyword-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 240px;
+  grid-template-columns: minmax(0, 1fr) 220px 150px;
   gap: 16px;
   align-items: center;
   padding: 14px 16px;
@@ -3289,7 +3402,7 @@ td strong {
   line-height: 1.2;
 }
 
-.keyword-row span {
+.keyword-row > span:nth-child(2) {
   color: var(--lc-dark-green);
   font-size: 20px;
   font-weight: 900;
@@ -3363,8 +3476,9 @@ td strong {
 
 .reddit-metrics strong {
   color: var(--lc-dark-green);
-  font-size: 22px;
+  font-size: 18px;
   line-height: 1;
+  overflow-wrap: anywhere;
 }
 
 .reddit-metrics span {
@@ -3413,6 +3527,83 @@ td strong {
   border-radius: var(--radius);
   background: var(--lc-white);
   color: var(--lc-navy);
+}
+
+.competitor-evidence-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.65fr) minmax(0, 1.35fr) auto auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border-top: 1px solid var(--lc-line);
+}
+
+.competitor-evidence-row:first-child {
+  border-top: 0;
+}
+
+.competitor-evidence-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.competitor-evidence-row span,
+.competitor-evidence-row p {
+  color: var(--lc-muted);
+  line-height: 1.4;
+}
+
+.ai-opportunity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.ai-opportunity-card {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius);
+  background: var(--lc-white);
+  color: var(--lc-navy);
+  padding: 18px;
+}
+
+.ai-opportunity-card > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-opportunity-card h3 {
+  font-size: 21px;
+  line-height: 1.2;
+}
+
+.ai-opportunity-card p,
+.ai-opportunity-card small {
+  color: var(--lc-muted);
+  line-height: 1.45;
+}
+
+.report-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius);
+  padding: 18px;
+  color: var(--lc-white);
+}
+
+.visibility-not-measured {
+  display: grid;
+  gap: 8px;
+  padding: 24px;
+  color: var(--lc-white);
 }
 
 .competitor-row {
@@ -3809,6 +4000,7 @@ td strong {
   .testimonial-grid,
   .comment-grid,
   .multiplier-grid,
+  .ai-opportunity-grid,
   .traffic-grid,
   .skeleton-card-grid,
   .skeleton-metric-grid {
@@ -3816,8 +4008,14 @@ td strong {
   }
 
   .keyword-table-head,
-  .keyword-row {
+  .keyword-row,
+  .competitor-evidence-row,
+  .report-claim {
     grid-template-columns: 1fr;
+  }
+
+  .evidence-legend {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .report-section-header {
@@ -3835,6 +4033,10 @@ td strong {
   }
 
   .testimonial-card {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-legend {
     grid-template-columns: 1fr;
   }
 }

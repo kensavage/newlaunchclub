@@ -19,6 +19,20 @@ export function VisibilityTransformationPlayer({
   companyName,
   snapshot
 }: VisibilityTransformationPlayerProps) {
+  if (
+    snapshot.currentAiVisibilityScore === null ||
+    snapshot.targetAiVisibilityScore === null ||
+    snapshot.currentRedditPresenceScore === null ||
+    snapshot.targetRedditPresenceScore === null
+  ) {
+    return (
+      <div className="remotion-shell visibility-not-measured">
+        <strong>Visibility transformation not measured</strong>
+        <p>{snapshot.evidence.publicExplanation}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="remotion-shell">
       <Player
@@ -48,14 +62,18 @@ function VisibilityTransformationComposition({
   const intro = spring({ frame, fps, config: { damping: 18, stiffness: 90 } });
   const lift = spring({ frame: frame - 34, fps, config: { damping: 18, stiffness: 80 } });
   const pulse = interpolate(Math.sin(frame / 12), [-1, 1], [0.94, 1.04]);
+  const currentAiScore = snapshot.currentAiVisibilityScore ?? 0;
+  const targetAiScore = snapshot.targetAiVisibilityScore ?? 0;
+  const currentRedditScore = snapshot.currentRedditPresenceScore ?? 0;
+  const targetRedditScore = snapshot.targetRedditPresenceScore ?? 0;
 
-  const currentAi = interpolate(intro, [0, 1], [0, snapshot.currentAiVisibilityScore]);
-  const targetAi = interpolate(lift, [0, 1], [snapshot.currentAiVisibilityScore, snapshot.targetAiVisibilityScore]);
-  const currentReddit = interpolate(intro, [0, 1], [0, snapshot.currentRedditPresenceScore]);
+  const currentAi = interpolate(intro, [0, 1], [0, currentAiScore]);
+  const targetAi = interpolate(lift, [0, 1], [currentAiScore, targetAiScore]);
+  const currentReddit = interpolate(intro, [0, 1], [0, currentRedditScore]);
   const targetReddit = interpolate(
     lift,
     [0, 1],
-    [snapshot.currentRedditPresenceScore, snapshot.targetRedditPresenceScore]
+    [currentRedditScore, targetRedditScore]
   );
 
   return (

@@ -102,11 +102,10 @@ export async function runReportJob(publicId: string, options: RunReportJobOption
     await setStep(store, job.publicId, "ai-search");
     await store.recordVendorEvent({
       publicId: job.publicId,
-      provider: env.ENABLE_REAL_AI_CHECKS ? "Configured AI-check provider" : "OpenAI",
-      endpoint: env.ENABLE_REAL_AI_CHECKS ? "real-ai-checks" : "simulation",
-      purpose: env.ENABLE_REAL_AI_CHECKS
-        ? "Check selected AI-search prompt opportunities"
-        : "Label AI-search examples as simulated opportunity examples",
+      provider: "OpenAI",
+      endpoint: "simulation",
+      purpose:
+        "Generate planning simulations while live AI-platform visibility remains not measured",
       status: "skipped",
       durationMs: 0
     });
@@ -128,7 +127,7 @@ export async function runReportJob(publicId: string, options: RunReportJobOption
           searchResults,
           ahrefs,
           reddit,
-          enableRealAiChecks: env.ENABLE_REAL_AI_CHECKS
+          enableRealAiChecks: false
         })
     });
 
@@ -152,7 +151,6 @@ export async function runReportJob(publicId: string, options: RunReportJobOption
 
     const safeReport = normalizeReport(reportWithMemes, job, {
       crawl,
-      enableRealAiChecks: env.ENABLE_REAL_AI_CHECKS,
       bookingUrl: env.NEXT_PUBLIC_BOOK_CALL_URL
     });
     await store.saveReport(job.publicId, safeReport);
@@ -264,10 +262,7 @@ function mergeKeywordMetrics(
     });
   }
 
-  return Array.from(byKeyword.values()).map((metric, index) => ({
-    ...metric,
-    monthlySearchVolume: metric.monthlySearchVolume ?? Math.max(10, 90 - index * 3)
-  }));
+  return Array.from(byKeyword.values());
 }
 
 function normalizeReport(
@@ -275,11 +270,9 @@ function normalizeReport(
   job: ReportJob,
   {
     crawl,
-    enableRealAiChecks,
     bookingUrl
   }: {
     crawl: CrawlResult;
-    enableRealAiChecks: boolean;
     bookingUrl: string;
   }
 ) {
@@ -295,8 +288,7 @@ function normalizeReport(
         crawlSummary: createCrawlSummary(crawl)
       }
     },
-    bookingUrl,
-    enableRealAiChecks
+    bookingUrl
   });
 }
 

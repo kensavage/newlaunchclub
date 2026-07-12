@@ -1,6 +1,5 @@
 import type {
   BusinessProfile,
-  KeywordOpportunity,
   MemeConcept,
   OpportunityReport
 } from "@/lib/report/schema";
@@ -98,24 +97,4 @@ export interface ProviderBundle {
     category: string;
   }): Promise<MemeConcept[]>;
   synthesizeReport(input: ReportSynthesisInput): Promise<OpportunityReport>;
-}
-
-export function toKeywordOpportunity(
-  metric: KeywordMetric,
-  fallbackIntent: string,
-  recommendedAction: string,
-  redditFit: KeywordOpportunity["redditFit"],
-  priority: KeywordOpportunity["priority"]
-): KeywordOpportunity {
-  return {
-    keyword: metric.keyword,
-    intent: metric.intent ?? fallbackIntent,
-    monthlySearchVolume: metric.monthlySearchVolume,
-    difficulty: metric.difficulty,
-    trafficPotential: metric.trafficPotential,
-    sourceVisibility: "Search and community visibility can be improved with a targeted answer page or Reddit-safe discussion angle.",
-    redditFit,
-    priority,
-    recommendedAction
-  };
 }

@@ -4,13 +4,13 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 import { ProgressTimeline } from "@/components/progress-timeline";
-import type { ReportJob, ReportResponse } from "@/lib/report/schema";
+import type { PublicReportJob, ReportResponse } from "@/lib/report/schema";
 
 export function ReportGenerator({ variant = "hero" }: { variant?: "hero" | "footer" }) {
   const router = useRouter();
   const [url, setUrl] = useState("");
   const [publicId, setPublicId] = useState<string | null>(null);
-  const [job, setJob] = useState<ReportJob | null>(null);
+  const [job, setJob] = useState<PublicReportJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isFooter = variant === "footer";

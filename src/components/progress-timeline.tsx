@@ -1,9 +1,9 @@
 "use client";
 
 import { Check, Clock, Loader2, X } from "lucide-react";
-import type { ReportJob } from "@/lib/report/schema";
+import type { PublicReportJob } from "@/lib/report/schema";
 
-export function ProgressTimeline({ job }: { job: ReportJob | null }) {
+export function ProgressTimeline({ job }: { job: PublicReportJob | null }) {
   if (!job) return null;
 
   return (

@@ -11,9 +11,10 @@ import {
   hashVisitorKey
 } from "@/lib/report/rate-limit";
 import { getReportStore } from "@/lib/report/store-factory";
-import { createPublicId, sanitizeError } from "@/lib/report/store";
+import { createPublicId } from "@/lib/report/store";
 import type { OpportunityReport } from "@/lib/report/schema";
 import { triggerReportWorker } from "@/lib/report/worker-client";
+import { getPublicReportError } from "@/lib/report/public-report";
 
 export const runtime = "nodejs";
 
@@ -70,11 +71,13 @@ export async function POST(request: Request) {
       { status: 202 }
     );
   } catch (error) {
+    const publicError = getPublicReportError(error);
+
     return NextResponse.json(
       {
-        error: sanitizeError(error)
+        error: publicError.message
       },
-      { status: 400 }
+      { status: publicError.status }
     );
   }
 }
