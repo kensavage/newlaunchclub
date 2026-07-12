@@ -8,6 +8,7 @@ import {
 } from "@/lib/report/memory-intake-store";
 import { MemoryReportStore } from "@/lib/report/memory-store";
 import { createInitialSteps } from "@/lib/report/steps";
+import { MemoryWorkflowStore, resetMemoryWorkflowStoreForTests } from "@/lib/workflow/memory-store";
 
 const requestMetadata = {
   requestSignalHash: "a".repeat(64),
@@ -17,6 +18,7 @@ const requestMetadata = {
 describe("transactional report intake store", () => {
   beforeEach(() => {
     resetMemoryIntakeStoreForTests();
+    resetMemoryWorkflowStoreForTests();
     globalThis.__launchClubReportStore = undefined;
   });
 
@@ -38,8 +40,9 @@ describe("transactional report intake store", () => {
     expect(snapshot.tokens).toHaveLength(1);
     expect(snapshot.accessEvents[0]?.eventType).toBe("issued");
     expect(JSON.stringify(snapshot)).not.toContain(rawToken);
-    expect(await reportStore.getJob(result.legacyPublicId)).not.toBeNull();
-    expect(await store.isLegacyIdProtected(result.legacyPublicId)).toBe(true);
+    expect(result.legacyPublicId).toBeNull();
+    expect(await reportStore.getJob(input.legacyPublicId)).toBeNull();
+    expect(new MemoryWorkflowStore().snapshot().workflows).toHaveLength(1);
   });
 
   it("deduplicates companies, contacts, leads, and idempotent requests", async () => {

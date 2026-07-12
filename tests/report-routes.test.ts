@@ -10,15 +10,14 @@ import {
 import { MemoryReportStore } from "@/lib/report/memory-store";
 import { resetRateLimitsForTests } from "@/lib/report/rate-limit";
 import { setReportStoreForTests } from "@/lib/report/store-factory";
-import { triggerReportWorker } from "@/lib/report/worker-client";
-
-vi.mock("@/lib/report/worker-client", () => ({
-  triggerReportWorker: vi.fn().mockResolvedValue(undefined)
-}));
+import { DeterministicWorkflowAdapter } from "@/lib/workflow/deterministic-adapter";
+import { MemoryWorkflowStore, resetMemoryWorkflowStoreForTests } from "@/lib/workflow/memory-store";
+import { setWorkflowDispatcherForTests, setWorkflowStoreForTests } from "@/lib/workflow/store-factory";
 
 describe("report intake and secure access routes", () => {
   let reportStore: MemoryReportStore;
   let intakeStore: MemoryReportIntakeStore;
+  let workflowStore: MemoryWorkflowStore;
 
   beforeEach(() => {
     vi.stubEnv(
@@ -30,17 +29,22 @@ describe("report intake and secure access routes", () => {
     vi.stubEnv("REPORT_USE_MEMORY_STORE", "true");
     resetRateLimitsForTests();
     resetMemoryIntakeStoreForTests();
+    resetMemoryWorkflowStoreForTests();
     globalThis.__launchClubReportStore = undefined;
     reportStore = new MemoryReportStore();
-    intakeStore = new MemoryReportIntakeStore(reportStore);
+    workflowStore = new MemoryWorkflowStore();
+    intakeStore = new MemoryReportIntakeStore(reportStore, workflowStore);
     setReportStoreForTests(reportStore);
     setReportIntakeStoreForTests(intakeStore);
-    vi.mocked(triggerReportWorker).mockClear();
+    setWorkflowStoreForTests(workflowStore);
+    setWorkflowDispatcherForTests(new DeterministicWorkflowAdapter(workflowStore));
   });
 
   afterEach(() => {
     setReportIntakeStoreForTests(null);
     setReportStoreForTests(null);
+    setWorkflowStoreForTests(null);
+    setWorkflowDispatcherForTests(null);
     vi.unstubAllEnvs();
   });
 
@@ -66,21 +70,21 @@ describe("report intake and secure access routes", () => {
       requestStatus: string;
     };
     const snapshot = intakeStore.snapshot();
-    const legacyPublicId = snapshot.reports[0]?.legacyPublicId;
 
     expect(postResponse.status).toBe(202);
     expect(acknowledgement.requestStatus).toBe("queued");
     expect(acknowledgement.reportAccessToken).toMatch(/^lc_report_/);
-    expect(triggerReportWorker).toHaveBeenCalledExactlyOnceWith(legacyPublicId);
+    expect(snapshot.reports[0]?.legacyPublicId).toBeNull();
+    expect(workflowStore.snapshot().workflows[0]?.status).toBe("ready_for_provider_research");
 
     const secureResponse = await getReport(acknowledgement.reportAccessToken);
     const secureBody = await secureResponse.json();
     expect(secureResponse.status).toBe(200);
     expect(secureBody.job.publicId).toBe(acknowledgement.reportAccessToken);
-    expect(JSON.stringify(secureBody)).not.toContain(legacyPublicId);
+    expect(secureBody.job.progress).toBe(94);
     expect(JSON.stringify(secureBody)).not.toContain("owner@example.com");
 
-    const hiddenWorkerIdResponse = await getReport(legacyPublicId!);
+    const hiddenWorkerIdResponse = await getReport("a".repeat(18));
     expect(hiddenWorkerIdResponse.status).toBe(404);
 
     const invalidTokenResponse = await getReport(generateReportAccessToken());
@@ -104,6 +108,8 @@ describe("report intake and secure access routes", () => {
     expect(response.status).toBe(200);
     expect(body.job.publicId).toBe(legacyPublicId);
     expect(JSON.stringify(body)).not.toContain("legacy-private-hash");
+    expect(workflowStore.snapshot().legacyAccesses).toHaveLength(1);
+    expect(JSON.stringify(workflowStore.snapshot().legacyAccesses)).not.toContain(legacyPublicId);
   });
 });
 

@@ -21,7 +21,7 @@ interface IntakeRpcRow {
   report_id: string;
   access_token_id: string;
   public_progress_id: string;
-  legacy_public_id: string;
+  legacy_public_id: string | null;
   request_status: ReportRequestStatus;
   request_created_at: string;
   reused: boolean;
@@ -36,7 +36,7 @@ interface AccessRpcRow {
   expires_at: string;
   public_progress_id: string;
   display_domain: string;
-  legacy_public_id: string;
+  legacy_public_id: string | null;
   request_status: ReportRequestStatus;
   request_created_at: string;
 }

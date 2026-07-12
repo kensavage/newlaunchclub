@@ -45,7 +45,8 @@ export interface ReportIntakeServiceDependencies {
 
 export interface ReportIntakeAcknowledgement {
   response: ReportIntakeResponse;
-  legacyPublicId: string;
+  reportRequestId: string;
+  reportId: string;
   shouldDispatch: boolean;
 }
 
@@ -149,7 +150,8 @@ export async function createReportIntake(
 
   return {
     response,
-    legacyPublicId: result.legacyPublicId,
+    reportRequestId: result.reportRequestId,
+    reportId: result.reportId,
     shouldDispatch: !result.reused && result.requestStatus === "queued"
   };
 }

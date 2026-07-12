@@ -12,6 +12,7 @@ import {
 } from "@/lib/report/memory-intake-store";
 import { MemoryReportStore } from "@/lib/report/memory-store";
 import { resetRateLimitsForTests } from "@/lib/report/rate-limit";
+import { resetMemoryWorkflowStoreForTests } from "@/lib/workflow/memory-store";
 
 const context = {
   ip: "203.0.113.42",
@@ -31,6 +32,7 @@ describe("report intake service", () => {
     vi.stubEnv("REPORT_DISPOSABLE_EMAIL_DOMAINS", "");
     resetRateLimitsForTests();
     resetMemoryIntakeStoreForTests();
+    resetMemoryWorkflowStoreForTests();
     globalThis.__launchClubReportStore = undefined;
   });
 

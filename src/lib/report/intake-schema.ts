@@ -85,7 +85,7 @@ export interface ReportIntakeResult {
   reportId: string;
   accessTokenId: string;
   publicProgressId: string;
-  legacyPublicId: string;
+  legacyPublicId: string | null;
   requestStatus: ReportRequestStatus;
   createdAt: string;
   reused: boolean;
@@ -100,7 +100,7 @@ export interface ResolvedReportAccess {
   expiresAt: string;
   publicProgressId: string;
   displayDomain: string;
-  legacyPublicId: string;
+  legacyPublicId: string | null;
   requestStatus: ReportRequestStatus;
   createdAt: string;
 }

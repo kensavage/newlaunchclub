@@ -4,7 +4,8 @@ import { createReportIntake } from "@/lib/report/intake-service";
 import { readJsonBodyWithLimit } from "@/lib/report/intake-validation";
 import { getPublicReportError } from "@/lib/report/public-report";
 import { getRequestIp } from "@/lib/report/rate-limit";
-import { triggerReportWorker } from "@/lib/report/worker-client";
+import { dispatchWorkflowOutbox } from "@/lib/workflow/outbox-dispatcher";
+import { getWorkflowDispatcher, getWorkflowStore } from "@/lib/workflow/store-factory";
 
 export const runtime = "nodejs";
 
@@ -30,7 +31,11 @@ export async function POST(request: Request) {
     });
 
     if (acknowledgement.shouldDispatch) {
-      await triggerReportWorker(acknowledgement.legacyPublicId);
+      const workflowStore = getWorkflowStore();
+      await dispatchWorkflowOutbox(workflowStore, getWorkflowDispatcher(workflowStore), {
+        limit: 1,
+        leaseSeconds: env.WORKFLOW_OUTBOX_LEASE_SECONDS
+      });
     }
 
     return NextResponse.json(acknowledgement.response, {

@@ -6,6 +6,7 @@ import {
   type ReportJob
 } from "@/lib/report/schema";
 import { IntakeCapacityError } from "@/lib/report/intake-store";
+import type { SafeWorkflowProgress } from "@/lib/workflow/schema";
 
 export const PUBLIC_REPORT_FAILURE_MESSAGE =
   "The report could not be completed. Please try again or use a different public website.";
@@ -51,6 +52,35 @@ export function createPublicReportResponse(
       errorSummary: failed ? PUBLIC_REPORT_FAILURE_MESSAGE : null
     },
     report: report ? publicOpportunityReportSchema.parse(report) : null
+  });
+}
+
+export function createPublicWorkflowResponse(
+  publicId: string,
+  progress: SafeWorkflowProgress
+) {
+  const status =
+    progress.state === "complete"
+      ? "complete"
+      : progress.state === "failed"
+        ? "failed"
+        : progress.state === "queued"
+          ? "queued"
+          : "running";
+
+  return reportResponseSchema.parse({
+    job: {
+      publicId,
+      status,
+      currentStep: progress.currentStep,
+      progress: progress.percent,
+      steps: progress.steps.map((step) => ({
+        ...step,
+        detail: step.detail ?? undefined
+      })),
+      errorSummary: progress.errorSummary
+    },
+    report: null
   });
 }
 

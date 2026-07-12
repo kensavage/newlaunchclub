@@ -13,6 +13,9 @@ export function getReportIntakeStore(): ReportIntakeStore {
   const env = getServerEnv();
 
   if (env.REPORT_USE_MEMORY_STORE) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Production requires Supabase report intake storage.");
+    }
     intakeStore = new MemoryReportIntakeStore(getReportStore());
     return intakeStore;
   }
@@ -23,6 +26,9 @@ export function getReportIntakeStore(): ReportIntakeStore {
       serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY
     });
   } else {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Production requires Supabase report intake storage.");
+    }
     intakeStore = new MemoryReportIntakeStore(getReportStore());
   }
 

@@ -13,6 +13,8 @@ import {
   type ReportIntakeStore
 } from "@/lib/report/intake-store";
 import type { ReportStore } from "@/lib/report/store";
+import { MemoryWorkflowStore } from "@/lib/workflow/memory-store";
+import type { WorkflowStore } from "@/lib/workflow/store";
 
 interface CompanyRecord {
   id: string;
@@ -55,7 +57,7 @@ interface ReportRequestRecord {
   idempotencyKeyHash: string;
   requestFingerprint: string;
   publicProgressId: string;
-  legacyPublicId: string;
+  legacyPublicId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -66,7 +68,7 @@ interface ReportRecord {
   reportRequestId: string;
   status: ReportRequestStatus;
   currentRevisionReference: string | null;
-  legacyPublicId: string;
+  legacyPublicId: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -149,7 +151,10 @@ function getState() {
 }
 
 export class MemoryReportIntakeStore implements ReportIntakeStore {
-  constructor(private readonly reportStore: ReportStore) {}
+  constructor(
+    private readonly reportStore: ReportStore,
+    private readonly workflowStore: WorkflowStore = new MemoryWorkflowStore()
+  ) {}
 
   private get state() {
     return getState();
@@ -276,7 +281,7 @@ export class MemoryReportIntakeStore implements ReportIntakeStore {
         idempotencyKeyHash: input.idempotencyKeyHash,
         requestFingerprint: input.requestFingerprint,
         publicProgressId: input.publicProgressId,
-        legacyPublicId: input.legacyPublicId,
+        legacyPublicId: null,
         createdAt: now,
         updatedAt: now
       };
@@ -286,19 +291,24 @@ export class MemoryReportIntakeStore implements ReportIntakeStore {
         reportRequestId: request.id,
         status: "queued",
         currentRevisionReference: null,
-        legacyPublicId: input.legacyPublicId,
+        legacyPublicId: null,
         createdAt: now,
         updatedAt: now,
         completedAt: null
       };
 
-      await this.reportStore.createJob({
-        publicId: input.legacyPublicId,
-        submittedUrl: input.normalizedSubmittedUrl,
-        normalizedUrl: input.normalizedSubmittedUrl,
-        domain: input.canonicalDomain,
-        visitorHash: input.visitorHash
+      await this.workflowStore.registerReportIdentity({
+        reportId: report.id,
+        publicProgressId: request.publicProgressId,
+        normalizedEmail: input.normalizedEmail
       });
+      await this.workflowStore.createInitialWorkflow({
+        reportRequestId: request.id,
+        reportId: report.id,
+        inputHash: input.requestFingerprint,
+        correlationId: request.id,
+        orchestratorBackend: "deterministic"
+      }, now);
 
       company.canonicalWebsiteUrl = input.canonicalWebsiteUrl;
       company.updatedAt = now;
@@ -525,6 +535,7 @@ export class MemoryReportIntakeStore implements ReportIntakeStore {
   }
 
   private async syncReportStatus(report: ReportRecord) {
+    if (!report.legacyPublicId) return;
     const job = await this.reportStore.getJob(report.legacyPublicId);
     if (!job) return;
 
