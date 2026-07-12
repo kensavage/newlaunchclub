@@ -1,87 +1,56 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { getServerEnv } from "@/lib/env";
-import {
-  assertPublicResolvableUrl,
-  normalizeSubmittedUrl
-} from "@/lib/report/url";
-import {
-  assertRateLimit,
-  getRequestIp,
-  hashVisitorKey
-} from "@/lib/report/rate-limit";
-import { getReportStore } from "@/lib/report/store-factory";
-import { createPublicId } from "@/lib/report/store";
-import type { OpportunityReport } from "@/lib/report/schema";
-import { triggerReportWorker } from "@/lib/report/worker-client";
+import { createReportIntake } from "@/lib/report/intake-service";
+import { readJsonBodyWithLimit } from "@/lib/report/intake-validation";
 import { getPublicReportError } from "@/lib/report/public-report";
+import { getRequestIp } from "@/lib/report/rate-limit";
+import { triggerReportWorker } from "@/lib/report/worker-client";
 
 export const runtime = "nodejs";
-
-const createReportRequestSchema = z.object({
-  url: z.string().min(1).max(2048)
-});
 
 export async function POST(request: Request) {
   const env = getServerEnv();
 
   try {
-    const body = createReportRequestSchema.parse(await request.json());
-    const normalized = normalizeSubmittedUrl(body.url);
-
-    if (!env.REPORT_USE_MOCK_PROVIDERS) {
-      await assertPublicResolvableUrl(normalized.normalizedUrl);
-    }
-
-    const ip = getRequestIp(request);
-    const visitorHash = hashVisitorKey(`${ip}:${normalized.domain}`, env.REPORT_RATE_LIMIT_SALT);
-
-    const store = getReportStore();
-    const cached = await store.findRecentCompletedReportByDomain(normalized.domain);
-
-    if (cached && hasOneLevelCrawlEvidence(cached.report)) {
-      return NextResponse.json(
-        {
-          publicId: cached.job.publicId,
-          reportUrl: `/reports/${cached.job.publicId}`,
-          reused: true
-        },
-        { status: 200 }
-      );
-    }
-
-    assertRateLimit(visitorHash);
-
-    const job = await store.createJob({
-      publicId: createPublicId(),
-      submittedUrl: normalized.submittedUrl,
-      normalizedUrl: normalized.normalizedUrl,
-      domain: normalized.domain,
-      visitorHash
+    const body = await readJsonBodyWithLimit(request, env.REPORT_MAX_REQUEST_BYTES);
+    const idempotencyHeader = request.headers.get("idempotency-key")?.trim();
+    const payload =
+      body && typeof body === "object" && !Array.isArray(body)
+        ? {
+            ...body,
+            idempotencyKey:
+              "idempotencyKey" in body && body.idempotencyKey
+                ? body.idempotencyKey
+                : idempotencyHeader
+          }
+        : body;
+    const acknowledgement = await createReportIntake(payload, {
+      ip: getRequestIp(request),
+      userAgent: request.headers.get("user-agent")
     });
 
-    await triggerReportWorker(job.publicId);
+    if (acknowledgement.shouldDispatch) {
+      await triggerReportWorker(acknowledgement.legacyPublicId);
+    }
 
-    return NextResponse.json(
-      {
-        publicId: job.publicId,
-        reportUrl: `/reports/${job.publicId}`,
-        reused: false
-      },
-      { status: 202 }
-    );
+    return NextResponse.json(acknowledgement.response, {
+      status: acknowledgement.response.reused ? 200 : 202,
+      headers: responseHeaders()
+    });
   } catch (error) {
     const publicError = getPublicReportError(error);
 
     return NextResponse.json(
-      {
-        error: publicError.message
-      },
-      { status: publicError.status }
+      { error: publicError.message },
+      { status: publicError.status, headers: responseHeaders() }
     );
   }
 }
 
-function hasOneLevelCrawlEvidence(report: OpportunityReport) {
-  return report.evidenceSummary.crawlSummary.startsWith("Crawled homepage +");
+function responseHeaders() {
+  return {
+    "Cache-Control": "private, no-store, max-age=0",
+    "Referrer-Policy": "no-referrer",
+    "X-Robots-Tag": "noindex, nofollow, noarchive"
+  };
 }

@@ -5,6 +5,7 @@ import {
   type OpportunityReport,
   type ReportJob
 } from "@/lib/report/schema";
+import { IntakeCapacityError } from "@/lib/report/intake-store";
 
 export const PUBLIC_REPORT_FAILURE_MESSAGE =
   "The report could not be completed. Please try again or use a different public website.";
@@ -14,18 +15,30 @@ const safeInputErrors = new Set([
   "Enter a valid website URL.",
   "Only public http and https websites can be analyzed.",
   "URLs with embedded credentials are not supported.",
+  "Only standard public web ports can be analyzed.",
   "Only public websites can be analyzed.",
   "Private network addresses cannot be analyzed.",
   "That website could not be resolved.",
+  "Enter a work email address.",
+  "Enter a valid work email address.",
+  "Disposable email addresses are not supported.",
+  "That email domain is not eligible for a report.",
+  "That website is not eligible for a report.",
+  "The report request is too large.",
+  "The report request is not valid JSON.",
   "Too many reports have been requested recently. Try again later."
 ]);
 
-export function createPublicReportResponse(job: ReportJob, report: OpportunityReport | null) {
+export function createPublicReportResponse(
+  job: ReportJob,
+  report: OpportunityReport | null,
+  { publicId = job.publicId }: { publicId?: string } = {}
+) {
   const failed = job.status === "failed";
 
   return reportResponseSchema.parse({
     job: {
-      publicId: job.publicId,
+      publicId,
       status: job.status,
       currentStep: job.currentStep,
       progress: job.progress,
@@ -43,7 +56,23 @@ export function createPublicReportResponse(job: ReportJob, report: OpportunityRe
 
 export function getPublicReportError(error: unknown) {
   if (error instanceof ZodError) {
-    return { message: "Enter a valid website URL.", status: 400 };
+    const field = error.issues[0]?.path[0];
+    return {
+      message:
+        field === "email"
+          ? "Enter a work email address."
+          : field === "url"
+            ? "Enter a valid website URL."
+            : "The report request is invalid.",
+      status: 400
+    };
+  }
+
+  if (error instanceof IntakeCapacityError) {
+    return {
+      message: "Report capacity is temporarily limited. Try again later.",
+      status: 429
+    };
   }
 
   if (error instanceof Error && safeInputErrors.has(error.message)) {

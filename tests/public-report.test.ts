@@ -54,4 +54,21 @@ describe("public report sanitization", () => {
       status: 500
     });
   });
+
+  it("can replace the internal worker identifier with a secure public access key", async () => {
+    const store = new MemoryReportStore();
+    const job = await store.createJob({
+      publicId: "internal-worker-id",
+      submittedUrl: "example.com",
+      normalizedUrl: "https://example.com/",
+      domain: "example.com",
+      visitorHash: "private-visitor-hash"
+    });
+    const secureAccessKey = `lc_report_${"a".repeat(43)}`;
+
+    const response = createPublicReportResponse(job, null, { publicId: secureAccessKey });
+
+    expect(response.job.publicId).toBe(secureAccessKey);
+    expect(JSON.stringify(response)).not.toContain("internal-worker-id");
+  });
 });

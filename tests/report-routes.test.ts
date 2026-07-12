@@ -1,0 +1,120 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GET } from "@/app/api/reports/[publicId]/route";
+import { POST } from "@/app/api/reports/route";
+import { generateReportAccessToken } from "@/lib/report/access-token";
+import { setReportIntakeStoreForTests } from "@/lib/report/intake-store-factory";
+import {
+  MemoryReportIntakeStore,
+  resetMemoryIntakeStoreForTests
+} from "@/lib/report/memory-intake-store";
+import { MemoryReportStore } from "@/lib/report/memory-store";
+import { resetRateLimitsForTests } from "@/lib/report/rate-limit";
+import { setReportStoreForTests } from "@/lib/report/store-factory";
+import { triggerReportWorker } from "@/lib/report/worker-client";
+
+vi.mock("@/lib/report/worker-client", () => ({
+  triggerReportWorker: vi.fn().mockResolvedValue(undefined)
+}));
+
+describe("report intake and secure access routes", () => {
+  let reportStore: MemoryReportStore;
+  let intakeStore: MemoryReportIntakeStore;
+
+  beforeEach(() => {
+    vi.stubEnv(
+      "REPORT_ACCESS_TOKEN_SECRET",
+      "route-test-access-secret-that-is-longer-than-thirty-two-characters"
+    );
+    vi.stubEnv("REPORT_RATE_LIMIT_SALT", "route-test-rate-salt-that-is-longer-than-32-characters");
+    vi.stubEnv("REPORT_USE_MOCK_PROVIDERS", "true");
+    vi.stubEnv("REPORT_USE_MEMORY_STORE", "true");
+    resetRateLimitsForTests();
+    resetMemoryIntakeStoreForTests();
+    globalThis.__launchClubReportStore = undefined;
+    reportStore = new MemoryReportStore();
+    intakeStore = new MemoryReportIntakeStore(reportStore);
+    setReportStoreForTests(reportStore);
+    setReportIntakeStoreForTests(intakeStore);
+    vi.mocked(triggerReportWorker).mockClear();
+  });
+
+  afterEach(() => {
+    setReportIntakeStoreForTests(null);
+    setReportStoreForTests(null);
+    vi.unstubAllEnvs();
+  });
+
+  it("returns a queued acknowledgement and allows only the opaque token for V3 access", async () => {
+    const postResponse = await POST(
+      new Request("http://localhost/api/reports", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "route-request-key-123456789",
+          "X-Forwarded-For": "203.0.113.75",
+          "User-Agent": "Route Test Browser"
+        },
+        body: JSON.stringify({
+          url: "example.com",
+          email: "owner@example.com",
+          source: "homepage_hero"
+        })
+      })
+    );
+    const acknowledgement = (await postResponse.json()) as {
+      reportAccessToken: string;
+      requestStatus: string;
+    };
+    const snapshot = intakeStore.snapshot();
+    const legacyPublicId = snapshot.reports[0]?.legacyPublicId;
+
+    expect(postResponse.status).toBe(202);
+    expect(acknowledgement.requestStatus).toBe("queued");
+    expect(acknowledgement.reportAccessToken).toMatch(/^lc_report_/);
+    expect(triggerReportWorker).toHaveBeenCalledExactlyOnceWith(legacyPublicId);
+
+    const secureResponse = await getReport(acknowledgement.reportAccessToken);
+    const secureBody = await secureResponse.json();
+    expect(secureResponse.status).toBe(200);
+    expect(secureBody.job.publicId).toBe(acknowledgement.reportAccessToken);
+    expect(JSON.stringify(secureBody)).not.toContain(legacyPublicId);
+    expect(JSON.stringify(secureBody)).not.toContain("owner@example.com");
+
+    const hiddenWorkerIdResponse = await getReport(legacyPublicId!);
+    expect(hiddenWorkerIdResponse.status).toBe(404);
+
+    const invalidTokenResponse = await getReport(generateReportAccessToken());
+    expect(invalidTokenResponse.status).toBe(404);
+    expect(await invalidTokenResponse.json()).toEqual(await hiddenWorkerIdResponse.json());
+  });
+
+  it("preserves grandfathered V2 report identifiers that are not protected by V3", async () => {
+    const legacyPublicId = "f".repeat(18);
+    await reportStore.createJob({
+      publicId: legacyPublicId,
+      submittedUrl: "legacy.example",
+      normalizedUrl: "https://legacy.example/",
+      domain: "legacy.example",
+      visitorHash: "legacy-private-hash"
+    });
+
+    const response = await getReport(legacyPublicId);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.job.publicId).toBe(legacyPublicId);
+    expect(JSON.stringify(body)).not.toContain("legacy-private-hash");
+  });
+});
+
+function getReport(publicId: string) {
+  return GET(
+    new Request(`http://localhost/api/reports/${publicId}`, {
+      headers: {
+        "X-Forwarded-For": "203.0.113.75",
+        "User-Agent": "Route Test Browser"
+      }
+    }),
+    { params: Promise.resolve({ publicId }) }
+  );
+}

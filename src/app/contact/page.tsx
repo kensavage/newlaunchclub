@@ -131,7 +131,7 @@ export default async function ContactPage({
       <section className="contact-report-cta">
         <h2>Ready to Tap Into <strong>Reddit Traffic?</strong></h2>
         <p>See which Reddit threads and AI-search opportunities are waiting for your brand.</p>
-        <ReportGenerator variant="footer" />
+        <ReportGenerator variant="footer" source="contact_footer" />
       </section>
       <SiteFooter />
     </main>

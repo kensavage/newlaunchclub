@@ -53,7 +53,7 @@ export default function HomePage() {
             See Where Reddit Is Talking To Your Prospects <strong>Without You</strong>
           </h2>
 
-          <ReportGenerator />
+          <ReportGenerator source="homepage_hero" />
         </div>
       </section>
       <HomeSections />

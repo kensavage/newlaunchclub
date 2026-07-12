@@ -1,9 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-test("visitor submits only a URL and receives a rendered opportunity report", async ({ page }) => {
+test("visitor submits a URL and work email and receives a secure opportunity report", async ({
+  page
+}) => {
   await page.goto("/");
 
   await page.getByLabel("Website URL").fill("launchclub.ai");
+  await page.locator("#work-email").fill("owner@launchclub.ai");
   await page.getByRole("button", { name: /run report/i }).click();
 
   await expect(
@@ -11,6 +14,15 @@ test("visitor submits only a URL and receives a rendered opportunity report", as
   ).toBeVisible({
     timeout: 20_000
   });
+  await expect(page).toHaveURL(/\/reports\/lc_report_[A-Za-z0-9_-]{43}$/);
+  const reportApiResponsePromise = page.waitForResponse(
+    (response) => response.url().includes("/api/reports/lc_report_") && response.status() === 200
+  );
+  const reportPageResponse = await page.reload();
+  const reportApiResponse = await reportApiResponsePromise;
+  expect(reportApiResponse.headers()["cache-control"]).toContain("no-store");
+  expect(reportPageResponse?.headers()["referrer-policy"]).toBe("no-referrer");
+  expect(reportPageResponse?.headers()["x-robots-tag"]).toContain("noindex");
   await expect(page.getByText("Your Hidden Keyword Goldmine")).toBeVisible();
   await expect(page.getByText("The Reddit Conversations You're Missing")).toBeVisible();
   await expect(page.getByText("How to read this report")).toBeVisible();
@@ -30,4 +42,30 @@ test("visitor submits only a URL and receives a rendered opportunity report", as
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByLabel("Email")).toBeVisible();
   await expect(page.getByText("Nothing is posted automatically.")).toBeVisible();
+});
+
+test("the existing homepage form placements remain usable on desktop and mobile", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.locator("#website-url")).toBeVisible();
+  await expect(page.locator("#work-email")).toBeVisible();
+  await expect(page.locator("#footer-website-url")).toBeVisible();
+  await expect(page.locator("#footer-work-email")).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const urlBox = await page.locator("#website-url").boundingBox();
+  const emailBox = await page.locator("#work-email").boundingBox();
+  const buttonBox = await page.getByRole("button", { name: /run report/i }).boundingBox();
+  expect(urlBox).not.toBeNull();
+  expect(emailBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  expect(emailBox!.y).toBeGreaterThanOrEqual(urlBox!.y + urlBox!.height);
+  expect(buttonBox!.y).toBeGreaterThanOrEqual(emailBox!.y + emailBox!.height);
+
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 });

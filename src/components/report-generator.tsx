@@ -2,19 +2,32 @@
 
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { ProgressTimeline } from "@/components/progress-timeline";
+import type {
+  IntakeSubmissionSource,
+  ReportIntakeResponse
+} from "@/lib/report/intake-schema";
 import type { PublicReportJob, ReportResponse } from "@/lib/report/schema";
 
-export function ReportGenerator({ variant = "hero" }: { variant?: "hero" | "footer" }) {
+export function ReportGenerator({
+  variant = "hero",
+  source = "website_report_form"
+}: {
+  variant?: "hero" | "footer";
+  source?: IntakeSubmissionSource;
+}) {
   const router = useRouter();
   const [url, setUrl] = useState("");
-  const [publicId, setPublicId] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [reportAccessToken, setReportAccessToken] = useState<string | null>(null);
   const [job, setJob] = useState<PublicReportJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const idempotencyKey = useRef<string | null>(null);
   const isFooter = variant === "footer";
   const inputId = isFooter ? "footer-website-url" : "website-url";
+  const emailInputId = isFooter ? "footer-work-email" : "work-email";
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -23,23 +36,25 @@ export function ReportGenerator({ variant = "hero" }: { variant?: "hero" | "foot
     setJob(null);
 
     try {
+      idempotencyKey.current ??= crypto.randomUUID();
       const response = await fetch("/api/reports", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey.current
         },
-        body: JSON.stringify({ url })
+        body: JSON.stringify({ url, email, idempotencyKey: idempotencyKey.current, source })
       });
-      const data = (await response.json()) as { publicId?: string; reportUrl?: string; error?: string };
+      const data = (await response.json()) as Partial<ReportIntakeResponse> & { error?: string };
 
-      if (!response.ok || !data.publicId) {
+      if (!response.ok || !data.reportAccessToken) {
         throw new Error(data.error ?? "The report could not be started.");
       }
 
-      setPublicId(data.publicId);
+      setReportAccessToken(data.reportAccessToken);
 
-      if (response.status === 200 && data.reportUrl) {
-        router.push(`/reports/${data.publicId}` as Route);
+      if (data.requestStatus === "complete") {
+        router.push(`/reports/${data.reportAccessToken}` as Route);
       }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "The report could not be started.");
@@ -49,12 +64,24 @@ export function ReportGenerator({ variant = "hero" }: { variant?: "hero" | "foot
   }
 
   useEffect(() => {
-    if (!publicId) return;
+    if (!reportAccessToken) return;
 
     let isActive = true;
     const timer = setInterval(async () => {
-      const response = await fetch(`/api/reports/${publicId}`, { cache: "no-store" });
-      if (!response.ok) return;
+      const response = await fetch(`/api/reports/${encodeURIComponent(reportAccessToken)}`, {
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        if (isActive) {
+          setError(
+            response.status === 404
+              ? "This secure report link is unavailable or has expired."
+              : "The report status could not be loaded. Please try again."
+          );
+          setReportAccessToken(null);
+        }
+        return;
+      }
 
       const data = (await response.json()) as ReportResponse;
       if (!isActive) return;
@@ -62,7 +89,7 @@ export function ReportGenerator({ variant = "hero" }: { variant?: "hero" | "foot
       setJob(data.job);
 
       if (data.job.status === "complete") {
-        router.push(`/reports/${publicId}` as Route);
+        router.push(`/reports/${reportAccessToken}` as Route);
       }
     }, 800);
 
@@ -70,7 +97,7 @@ export function ReportGenerator({ variant = "hero" }: { variant?: "hero" | "foot
       isActive = false;
       clearInterval(timer);
     };
-  }, [publicId, router]);
+  }, [reportAccessToken, router]);
 
   return (
     <section
@@ -82,14 +109,30 @@ export function ReportGenerator({ variant = "hero" }: { variant?: "hero" | "foot
         <label className="sr-only" htmlFor={inputId}>
           {isFooter ? "Website address" : "Website URL"}
         </label>
-        <div className="url-row">
+        <div className="url-row report-intake-row">
           <input
+            autoComplete="url"
             id={inputId}
+            inputMode="url"
             name="url"
             placeholder={isFooter ? "Enter your website" : "https://example.com"}
             type="text"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
+            required
+          />
+          <label className="sr-only" htmlFor={emailInputId}>
+            Work email
+          </label>
+          <input
+            autoComplete="email"
+            id={emailInputId}
+            inputMode="email"
+            name="email"
+            placeholder="you@company.com"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
             required
           />
           <button

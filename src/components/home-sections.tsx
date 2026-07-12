@@ -470,7 +470,7 @@ export function HomeSections() {
             See which Reddit threads are already ranking for your top keywords — so you can
             piggyback on traffic that already exists.
           </p>
-          <ReportGenerator variant="footer" />
+          <ReportGenerator variant="footer" source="homepage_footer" />
         </div>
       </section>
 
