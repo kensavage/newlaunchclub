@@ -13,6 +13,17 @@ export const INITIAL_WORKFLOW_STEPS = [
   "mark_ready_for_provider_research"
 ] as const;
 
+export const PROVIDER_RESEARCH_WORKFLOW_STEPS = [
+  "website_research",
+  "company_profile_extraction",
+  "search_query_discovery"
+] as const;
+
+export const ALL_WORKFLOW_STEPS = [
+  ...INITIAL_WORKFLOW_STEPS,
+  ...PROVIDER_RESEARCH_WORKFLOW_STEPS
+] as const;
+
 export const workflowStatusSchema = z.enum([
   "queued",
   "dispatch_pending",
@@ -20,6 +31,7 @@ export const workflowStatusSchema = z.enum([
   "waiting_retry",
   "paused",
   "ready_for_provider_research",
+  "ready_for_search_intelligence",
   "partially_complete",
   "completed",
   "failed",
@@ -61,7 +73,9 @@ export type WorkflowStatus = z.infer<typeof workflowStatusSchema>;
 export type StepStatus = z.infer<typeof stepStatusSchema>;
 export type FailureClassification = z.infer<typeof failureClassificationSchema>;
 export type WorkflowQueuePayload = z.infer<typeof workflowQueuePayloadSchema>;
-export type WorkflowStepKey = (typeof INITIAL_WORKFLOW_STEPS)[number];
+export type WorkflowStepKey = (typeof ALL_WORKFLOW_STEPS)[number];
+export type FoundationWorkflowStepKey = (typeof INITIAL_WORKFLOW_STEPS)[number];
+export type ProviderResearchWorkflowStepKey = (typeof PROVIDER_RESEARCH_WORKFLOW_STEPS)[number];
 
 export interface WorkflowRecord {
   id: string;
@@ -70,7 +84,7 @@ export interface WorkflowRecord {
   workflowType: "initial_report";
   workflowVersion: number;
   status: WorkflowStatus;
-  currentPhase: WorkflowStepKey | "provider_research";
+  currentPhase: WorkflowStepKey | "provider_research" | "search_intelligence";
   priority: number;
   inputHash: string;
   orchestratorBackend: "supabase_queue" | "deterministic";

@@ -89,6 +89,14 @@ export interface WorkflowStore {
   getWorkflowDetail(workflowId: string): Promise<WorkflowDetail | null>;
   getPublicProgress(reportRequestId: string): Promise<SafeWorkflowProgress | null>;
   listWorkflows(filter?: WorkflowListFilter): Promise<WorkflowRecord[]>;
+  prepareProviderResearchContinuation(input: {
+    workflowId: string;
+    websiteEstimatedCostCents: number;
+    profileEstimatedCostCents: number;
+    queryEstimatedCostCents: number;
+    maximumAttempts: number;
+    now?: string;
+  }): Promise<boolean>;
 
   claimOutbox(input: {
     owner: string;

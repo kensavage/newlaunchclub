@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { getServerEnv } from "@/lib/env";
-import { INITIAL_WORKFLOW_STEPS, workflowStatusSchema, type WorkflowStepKey } from "@/lib/workflow/schema";
+import { ALL_WORKFLOW_STEPS, workflowStatusSchema, type WorkflowStepKey } from "@/lib/workflow/schema";
 import type { AdminActor, WorkflowStore } from "@/lib/workflow/store";
 
 export function createServerCliAdminActor(): AdminActor {
@@ -57,7 +57,7 @@ export class WorkflowAdministratorService {
 }
 
 function parseStepKey(value: string): WorkflowStepKey {
-  if (!INITIAL_WORKFLOW_STEPS.includes(value as WorkflowStepKey)) {
+  if (!ALL_WORKFLOW_STEPS.includes(value as WorkflowStepKey)) {
     throw new Error(`Unknown workflow step: ${value}`);
   }
   return value as WorkflowStepKey;

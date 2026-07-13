@@ -1,8 +1,10 @@
 import "server-only";
 import crypto from "node:crypto";
 import {
+  ALL_WORKFLOW_STEPS,
   INITIAL_REPORT_BUDGET_CENTS,
   INITIAL_WORKFLOW_STEPS,
+  PROVIDER_RESEARCH_WORKFLOW_STEPS,
   WEEKLY_REFRESH_BUDGET_CENTS,
   WORKFLOW_MESSAGE_TYPE,
   type CostBudgetRecord,
@@ -229,7 +231,7 @@ export class MemoryWorkflowStore implements WorkflowStore {
 
   async getPublicProgress(reportRequestId: string) {
     const workflow = await this.getWorkflowByReportRequest(reportRequestId);
-    return workflow ? mapPublicProgress(workflow) : null;
+    return workflow ? mapPublicProgress(workflow, this.stepsFor(workflow.id)) : null;
   }
 
   async listWorkflows(filter: WorkflowListFilter = {}) {
@@ -240,6 +242,88 @@ export class MemoryWorkflowStore implements WorkflowStore {
       )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, filter.limit ?? 50);
+  }
+
+  async prepareProviderResearchContinuation(input: {
+    workflowId: string;
+    websiteEstimatedCostCents: number;
+    profileEstimatedCostCents: number;
+    queryEstimatedCostCents: number;
+    maximumAttempts: number;
+    now?: string;
+  }) {
+    return this.withLock(async () => {
+      const now = input.now ?? new Date().toISOString();
+      const workflow = this.requireWorkflow(input.workflowId);
+      if (this.stepsFor(workflow.id).some((step) => step.stepKey === "website_research")) return false;
+      if (workflow.status !== "ready_for_provider_research") throw new WorkflowStateError();
+      const costs = {
+        website_research: input.websiteEstimatedCostCents,
+        company_profile_extraction: input.profileEstimatedCostCents,
+        search_query_discovery: input.queryEstimatedCostCents
+      } as const;
+      if (Object.values(costs).some((cost) => !Number.isSafeInteger(cost) || cost < 0) ||
+        Object.values(costs).reduce((sum, cost) => sum + cost, 0) > INITIAL_REPORT_BUDGET_CENTS) {
+        throw new WorkflowBudgetError();
+      }
+      for (const stepKey of PROVIDER_RESEARCH_WORKFLOW_STEPS) {
+        const step: WorkflowStepRecord = {
+          id: crypto.randomUUID(),
+          workflowId: workflow.id,
+          stepKey,
+          stepVersion: 1,
+          status: "pending",
+          inputHash: hashStable(`${workflow.inputHash}:${stepKey}:1`),
+          outputReference: null,
+          attemptCount: 0,
+          maximumAttempts: stepKey === "website_research"
+            ? Math.max(20, input.maximumAttempts)
+            : input.maximumAttempts,
+          optional: false,
+          estimatedCostCents: costs[stepKey],
+          actualCostCents: 0,
+          scheduledAt: now,
+          startedAt: null,
+          completedAt: null,
+          createdAt: now,
+          updatedAt: now
+        };
+        this.state.steps.set(step.id, step);
+      }
+      workflow.status = "dispatch_pending";
+      workflow.currentPhase = "website_research";
+      workflow.updatedAt = now;
+      this.addEvent(workflow.id, "provider_research_continuation_created", workflow.id, "orchestrator", {}, now);
+      const idempotencyKey = `${WORKFLOW_MESSAGE_TYPE}:${workflow.id}:provider-research:v1`;
+      if (![...this.state.outbox.values()].some((event) => event.idempotencyKey === idempotencyKey)) {
+        const outbox: OutboxEventRecord = {
+          id: crypto.randomUUID(),
+          eventType: WORKFLOW_MESSAGE_TYPE,
+          aggregateType: "research_workflow",
+          aggregateId: workflow.id,
+          payload: {
+            workflowId: workflow.id,
+            reportRequestId: workflow.reportRequestId,
+            reportId: workflow.reportId,
+            correlationId: crypto.randomUUID(),
+            workflowVersion: workflow.workflowVersion,
+            requestedAt: now
+          },
+          idempotencyKey,
+          status: "pending",
+          attemptCount: 0,
+          availableAt: now,
+          leasedAt: null,
+          leaseOwner: null,
+          sentAt: null,
+          lastSafeError: null,
+          createdAt: now,
+          updatedAt: now
+        };
+        this.state.outbox.set(outbox.id, outbox);
+      }
+      return true;
+    });
   }
 
   async claimOutbox({ owner, limit, leaseSeconds, now = new Date().toISOString() }: {
@@ -328,7 +412,7 @@ export class MemoryWorkflowStore implements WorkflowStore {
       if (step.status === "succeeded") {
         return { disposition: "already_succeeded", workflow, step, lease: null, attemptId: null };
       }
-      const stepIndex = INITIAL_WORKFLOW_STEPS.indexOf(stepKey);
+      const stepIndex = ALL_WORKFLOW_STEPS.indexOf(stepKey);
       const prerequisiteIncomplete = this.stepsFor(workflowId)
         .slice(0, stepIndex)
         .some((candidate) => candidate.status !== "succeeded");
@@ -337,6 +421,8 @@ export class MemoryWorkflowStore implements WorkflowStore {
         workflow.status === "paused" ||
         workflow.status === "cancelled" ||
         workflow.status === "failed" ||
+        workflow.status === "completed" ||
+        workflow.status === "ready_for_search_intelligence" ||
         Date.parse(step.scheduledAt) > Date.parse(now)
       ) {
         return { disposition: "unavailable", workflow, step, lease: null, attemptId: null };
@@ -452,6 +538,10 @@ export class MemoryWorkflowStore implements WorkflowStore {
         workflow.status = "ready_for_provider_research";
         workflow.currentPhase = "provider_research";
         this.addEvent(workflowId, "workflow_ready_for_provider_research", workflowId, "orchestrator", {}, now);
+      } else if (stepKey === "search_query_discovery") {
+        workflow.status = "ready_for_search_intelligence";
+        workflow.currentPhase = "search_intelligence";
+        this.addEvent(workflowId, "workflow_ready_for_search_intelligence", workflowId, "orchestrator", {}, now);
       }
       workflow.updatedAt = now;
       return true;
@@ -732,7 +822,7 @@ export class MemoryWorkflowStore implements WorkflowStore {
   }
 
   private stepsFor(workflowId: string) {
-    return [...this.state.steps.values()].filter((step) => step.workflowId === workflowId).sort((a, b) => INITIAL_WORKFLOW_STEPS.indexOf(a.stepKey) - INITIAL_WORKFLOW_STEPS.indexOf(b.stepKey));
+    return [...this.state.steps.values()].filter((step) => step.workflowId === workflowId).sort((a, b) => ALL_WORKFLOW_STEPS.indexOf(a.stepKey) - ALL_WORKFLOW_STEPS.indexOf(b.stepKey));
   }
 
   private requireWorkflow(workflowId: string) {
@@ -812,10 +902,13 @@ export function resetMemoryWorkflowStoreForTests() {
   globalThis.__launchClubWorkflowStore = undefined;
 }
 
-export function mapPublicProgress(workflow: WorkflowRecord): SafeWorkflowProgress {
+export function mapPublicProgress(workflow: WorkflowRecord, steps: WorkflowStepRecord[] = []): SafeWorkflowProgress {
   const failed = workflow.status === "failed";
+  const website = steps.find((step) => step.stepKey === "website_research");
+  const profile = steps.find((step) => step.stepKey === "company_profile_extraction");
+  const queries = steps.find((step) => step.stepKey === "search_query_discovery");
   const state: SafeWorkflowProgress["state"] =
-    workflow.status === "ready_for_provider_research" ? "research_ready" :
+    workflow.status === "ready_for_search_intelligence" ? "research_ready" :
     workflow.status === "waiting_retry" || workflow.status === "paused" ? "temporarily_delayed" :
     workflow.status === "partially_complete" ? "partially_complete" :
     workflow.status === "completed" ? "complete" :
@@ -825,6 +918,30 @@ export function mapPublicProgress(workflow: WorkflowRecord): SafeWorkflowProgres
     state === "failed" ? "failed" as const : state === "complete" ? "complete" as const : "running" as const;
   const preparationDetail =
     state === "temporarily_delayed" ? "Preparation is temporarily delayed." : null;
+
+  if (website) {
+    const publicStatus = (step: WorkflowStepRecord | undefined) =>
+      step?.status === "succeeded" ? "complete" as const :
+      step?.status === "running" || step?.status === "leased" || step?.status === "retry_scheduled"
+        ? "running" as const :
+      step?.status === "failed_terminal" || step?.status === "cancelled" ? "failed" as const :
+      "pending" as const;
+    const currentStep = failed ? "failed" :
+      queries?.status === "running" || queries?.status === "retry_scheduled" || queries?.status === "succeeded" ? "keywords" :
+      profile?.status === "running" || profile?.status === "retry_scheduled" || profile?.status === "succeeded" ? "analysis" :
+      website.status === "running" || website.status === "retry_scheduled" || website.status === "succeeded" ? "crawl" : "crawl";
+    return {
+      state,
+      currentStep,
+      steps: [
+        { id: "queued", label: "Request received", status: "complete", detail: null },
+        { id: "crawl", label: "Reviewing your website", status: publicStatus(website), detail: website.status === "retry_scheduled" ? "Website review is temporarily delayed." : null },
+        { id: "analysis", label: "Building your company profile", status: publicStatus(profile), detail: profile?.status === "retry_scheduled" ? "Company analysis is temporarily delayed." : null },
+        { id: "keywords", label: "Preparing your market research", status: publicStatus(queries), detail: queries?.status === "retry_scheduled" ? "Market research preparation is temporarily delayed." : null }
+      ],
+      errorSummary: failed ? "The research could not continue. Please try again." : null
+    };
+  }
 
   return {
     state,

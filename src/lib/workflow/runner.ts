@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { INITIAL_WORKFLOW_STEPS, type FailureClassification, type WorkflowQueuePayload, type WorkflowStepKey } from "@/lib/workflow/schema";
+import { INITIAL_WORKFLOW_STEPS, type FailureClassification, type FoundationWorkflowStepKey, type WorkflowQueuePayload, type WorkflowStepKey } from "@/lib/workflow/schema";
 import { WorkflowBudgetError, WorkflowConfigurationError, type WorkflowStore } from "@/lib/workflow/store";
 
 export interface WorkflowRunnerOptions {
@@ -38,13 +38,16 @@ export class DurableWorkflowRunner {
   }
 
   async runStep(workflowId: string, stepKey: WorkflowStepKey, owner: string) {
+    if (!INITIAL_WORKFLOW_STEPS.includes(stepKey as FoundationWorkflowStepKey)) {
+      throw new WorkflowConfigurationError("The foundation runner cannot execute provider research steps.");
+    }
     const now = this.now().toISOString();
     const lease = await this.store.beginStep({ workflowId, stepKey, owner, leaseSeconds: this.leaseSeconds, now });
     if (lease.disposition === "already_succeeded") return "already_succeeded" as const;
     if (lease.disposition === "unavailable" || !lease.lease || !lease.attemptId) return "unavailable" as const;
 
     try {
-      await this.executeFoundationStep(workflowId, stepKey);
+      await this.executeFoundationStep(workflowId, stepKey as FoundationWorkflowStepKey);
       const completed = await this.store.completeStep({ workflowId, stepKey, owner, fencingToken: lease.lease.fencingToken, outputReference: `workflow-step:${stepKey}:v1`, now: this.now().toISOString() });
       return completed ? "succeeded" as const : "lease_conflict" as const;
     } catch (error) {
@@ -67,7 +70,7 @@ export class DurableWorkflowRunner {
     }
   }
 
-  private async executeFoundationStep(workflowId: string, stepKey: WorkflowStepKey) {
+  private async executeFoundationStep(workflowId: string, stepKey: FoundationWorkflowStepKey) {
     if (stepKey === "initialize_workflow") {
       if (!(await this.store.getWorkflow(workflowId))) throw new WorkflowConfigurationError();
       return;

@@ -89,7 +89,7 @@ describe("workflow queue security boundaries", () => {
     expect(clientFiles.length).toBeGreaterThan(0);
     for (const filePath of clientFiles) {
       const source = readFileSync(filePath, "utf8");
-      expect(source, filePath).not.toMatch(/SUPABASE_SERVICE_ROLE_KEY|WORKFLOW_WAKEUP_SECRET|WORKFLOW_ADMIN_SECRET|pgmq|workflow\/queue/);
+      expect(source, filePath).not.toMatch(/OPENAI_API_KEY|FIRECRAWL_API_KEY|SUPABASE_SERVICE_ROLE_KEY|WORKFLOW_WAKEUP_SECRET|WORKFLOW_ADMIN_SECRET|V3_PROVIDER_RESEARCH_ENABLED|pgmq|workflow\/queue/);
     }
   });
 

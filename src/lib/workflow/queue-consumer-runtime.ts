@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { parseWorkflowQueuePayload, type WorkflowQueue, type WorkflowQueueMessage } from "@/lib/workflow/queue-runtime";
 import { DurableWorkflowRunner } from "@/lib/workflow/runner";
-import { INITIAL_WORKFLOW_STEPS, type FailureClassification, type WorkflowDetail, type WorkflowStepRecord } from "@/lib/workflow/schema";
+import { ALL_WORKFLOW_STEPS, type FailureClassification, type WorkflowDetail, type WorkflowStepRecord } from "@/lib/workflow/schema";
 import type { WorkflowStore } from "@/lib/workflow/store";
 
 interface WorkflowStepRunner {
@@ -18,6 +18,9 @@ export interface WorkflowQueueConsumerOptions {
   cleanupReserveMilliseconds?: number;
   now?: () => Date;
   runner?: WorkflowStepRunner;
+  providerResearchContinuation?: {
+    prepare(workflowId: string, now?: string): Promise<boolean>;
+  };
 }
 
 export interface WorkflowQueueConsumerResult {
@@ -38,6 +41,7 @@ export class WorkflowQueueConsumer {
   private readonly cleanupReserveMilliseconds: number;
   private readonly now: () => Date;
   private readonly runner: WorkflowStepRunner;
+  private readonly providerResearchContinuation: WorkflowQueueConsumerOptions["providerResearchContinuation"];
 
   constructor(
     private readonly store: WorkflowStore,
@@ -50,6 +54,7 @@ export class WorkflowQueueConsumer {
     this.cleanupReserveMilliseconds = options.cleanupReserveMilliseconds ?? 10_000;
     this.now = options.now ?? (() => new Date());
     this.runner = options.runner ?? new DurableWorkflowRunner(store, { leaseSeconds: options.leaseSeconds });
+    this.providerResearchContinuation = options.providerResearchContinuation;
   }
 
   async consume(): Promise<WorkflowQueueConsumerResult> {
@@ -141,7 +146,21 @@ export class WorkflowQueueConsumer {
       await this.queue.archive(message.messageId);
       return "archived";
     }
-    if (detail.workflow.status === "ready_for_provider_research" || detail.workflow.status === "completed") {
+    if (detail.workflow.status === "ready_for_provider_research") {
+      if (!this.providerResearchContinuation) {
+        await this.queue.archive(message.messageId);
+        return "archived";
+      }
+      try {
+        await this.providerResearchContinuation.prepare(detail.workflow.id, this.now().toISOString());
+        await this.queue.release(message.messageId, 0);
+        return "succeeded";
+      } catch {
+        await this.queue.release(message.messageId, 60);
+        return "deferred";
+      }
+    }
+    if (detail.workflow.status === "ready_for_search_intelligence" || detail.workflow.status === "completed") {
       await this.queue.archive(message.messageId);
       return "archived";
     }
@@ -192,7 +211,21 @@ export class WorkflowQueueConsumer {
     }
 
     detail = await this.store.getWorkflowDetail(parsed.workflowId);
-    if (detail?.workflow.status === "ready_for_provider_research" || detail?.workflow.status === "completed") {
+    if (detail?.workflow.status === "ready_for_provider_research") {
+      if (!this.providerResearchContinuation) {
+        await this.queue.archive(message.messageId);
+        return "archived";
+      }
+      try {
+        await this.providerResearchContinuation.prepare(detail.workflow.id, this.now().toISOString());
+        await this.queue.release(message.messageId, 0);
+        return "succeeded";
+      } catch {
+        await this.queue.release(message.messageId, 60);
+        return "deferred";
+      }
+    }
+    if (detail?.workflow.status === "ready_for_search_intelligence" || detail?.workflow.status === "completed") {
       await this.queue.archive(message.messageId);
       return "archived";
     }
@@ -228,7 +261,7 @@ function matchesCanonicalWorkflow(
 }
 
 function nextEligibleStep(detail: WorkflowDetail) {
-  return INITIAL_WORKFLOW_STEPS
+  return ALL_WORKFLOW_STEPS
     .map((stepKey) => detail.steps.find((step) => step.stepKey === stepKey))
     .find((step) => step && step.status !== "succeeded" && step.status !== "skipped");
 }

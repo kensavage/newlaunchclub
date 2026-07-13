@@ -5,6 +5,11 @@ const booleanStringSchema = z
   .optional()
   .transform((value) => value === "true");
 
+const optionalPositiveNumberSchema = z.preprocess(
+  (value) => (value === "" || value === undefined ? undefined : value),
+  z.coerce.number().positive().max(1_000_000).optional()
+);
+
 function integerEnvSchema(defaultValue: number, minimum: number, maximum: number) {
   return z.preprocess(
     (value) => (value === "" || value === undefined ? undefined : value),
@@ -44,6 +49,17 @@ const serverEnvSchema = z.object({
   WORKFLOW_QUEUE_BATCH_SIZE: integerEnvSchema(5, 1, 25),
   WORKFLOW_QUEUE_VISIBILITY_TIMEOUT_SECONDS: integerEnvSchema(120, 30, 900),
   WORKFLOW_CONSUMER_MAX_RUNTIME_SECONDS: integerEnvSchema(780, 30, 840),
+  V3_PROVIDER_RESEARCH_ENABLED: booleanStringSchema,
+  V3_PROVIDER_MAX_CRAWL_PAGES: integerEnvSchema(7, 2, 20),
+  V3_PROVIDER_QUERY_COUNT: integerEnvSchema(18, 5, 30),
+  V3_PROVIDER_POLL_INTERVAL_SECONDS: integerEnvSchema(10, 2, 300),
+  V3_PROVIDER_EVIDENCE_TTL_HOURS: integerEnvSchema(48, 1, 720),
+  V3_FIRECRAWL_RESERVATION_CENTS: integerEnvSchema(160, 0, 400),
+  V3_OPENAI_PROFILE_RESERVATION_CENTS: integerEnvSchema(120, 0, 400),
+  V3_OPENAI_QUERY_RESERVATION_CENTS: integerEnvSchema(80, 0, 400),
+  V3_FIRECRAWL_CENTS_PER_CREDIT: optionalPositiveNumberSchema,
+  V3_OPENAI_INPUT_CENTS_PER_MILLION_TOKENS: optionalPositiveNumberSchema,
+  V3_OPENAI_OUTPUT_CENTS_PER_MILLION_TOKENS: optionalPositiveNumberSchema,
   REPORT_REQUEST_COOLDOWN_HOURS: integerEnvSchema(24, 1, 720),
   REPORT_DOMAIN_COOLDOWN_MINUTES: integerEnvSchema(60, 1, 10_080),
   REPORT_CONTACT_COOLDOWN_MINUTES: integerEnvSchema(60, 1, 10_080),

@@ -71,6 +71,24 @@ export class SupabaseWorkflowStore implements WorkflowStore {
     });
   }
 
+  async prepareProviderResearchContinuation(input: {
+    workflowId: string;
+    websiteEstimatedCostCents: number;
+    profileEstimatedCostCents: number;
+    queryEstimatedCostCents: number;
+    maximumAttempts: number;
+    now?: string;
+  }) {
+    return this.rpcJson<boolean>("prepare_v3_provider_research", {
+      p_workflow_id: input.workflowId,
+      p_website_estimated_cost_cents: input.websiteEstimatedCostCents,
+      p_profile_estimated_cost_cents: input.profileEstimatedCostCents,
+      p_query_estimated_cost_cents: input.queryEstimatedCostCents,
+      p_maximum_attempts: input.maximumAttempts,
+      p_now: input.now ?? new Date().toISOString()
+    });
+  }
+
   async claimOutbox({ owner, limit, leaseSeconds, now = new Date().toISOString() }: {
     owner: string; limit: number; leaseSeconds: number; now?: string;
   }) {
