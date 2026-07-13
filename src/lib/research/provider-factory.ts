@@ -108,6 +108,9 @@ export function getProviderResearchReservationPolicy(env: ServerEnv) {
   if (totalReservation > 400) {
     throw configurationError("PR4 provider reservations exceed the report budget.");
   }
+  if (totalReservation > env.V3_PROVIDER_MAX_RESERVATION_CENTS) {
+    throw configurationError("PR4 provider reservations exceed the configured provider cap.");
+  }
   return policy;
 }
 

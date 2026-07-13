@@ -151,4 +151,24 @@ describe("PR4 provider contracts and selection", () => {
       V3_OPENAI_QUERY_RESERVATION_CENTS: "100"
     }))).toThrow(/budget/i);
   });
+
+  it("enforces a stricter server-configured provider reservation cap", () => {
+    expect(getProviderResearchReservationPolicy(parseServerEnv({
+      V3_PROVIDER_MAX_RESERVATION_CENTS: "100",
+      V3_FIRECRAWL_RESERVATION_CENTS: "50",
+      V3_OPENAI_PROFILE_RESERVATION_CENTS: "25",
+      V3_OPENAI_QUERY_RESERVATION_CENTS: "25"
+    }))).toEqual({
+      websiteReservationCents: 50,
+      profileReservationCents: 25,
+      queryReservationCents: 25
+    });
+
+    expect(() => getProviderResearchReservationPolicy(parseServerEnv({
+      V3_PROVIDER_MAX_RESERVATION_CENTS: "100",
+      V3_FIRECRAWL_RESERVATION_CENTS: "50",
+      V3_OPENAI_PROFILE_RESERVATION_CENTS: "26",
+      V3_OPENAI_QUERY_RESERVATION_CENTS: "25"
+    }))).toThrow(/configured provider cap/i);
+  });
 });

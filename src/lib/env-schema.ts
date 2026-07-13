@@ -54,6 +54,7 @@ const serverEnvSchema = z.object({
   V3_PROVIDER_QUERY_COUNT: integerEnvSchema(18, 5, 30),
   V3_PROVIDER_POLL_INTERVAL_SECONDS: integerEnvSchema(10, 2, 300),
   V3_PROVIDER_EVIDENCE_TTL_HOURS: integerEnvSchema(48, 1, 720),
+  V3_PROVIDER_MAX_RESERVATION_CENTS: integerEnvSchema(400, 0, 400),
   V3_FIRECRAWL_RESERVATION_CENTS: integerEnvSchema(160, 0, 400),
   V3_OPENAI_PROFILE_RESERVATION_CENTS: integerEnvSchema(120, 0, 400),
   V3_OPENAI_QUERY_RESERVATION_CENTS: integerEnvSchema(80, 0, 400),

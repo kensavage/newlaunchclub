@@ -19,6 +19,7 @@ const envSchema = readFileSync(path.join(root, "src/lib/env-schema.ts"), "utf8")
 describe("PR4 provider research security and scope boundaries", () => {
   it("keeps every provider control and credential server-only", () => {
     expect(envSchema).toContain("V3_PROVIDER_RESEARCH_ENABLED");
+    expect(envSchema).toContain("V3_PROVIDER_MAX_RESERVATION_CENTS");
     expect(envSchema).not.toMatch(/NEXT_PUBLIC_(?:V3_PROVIDER|OPENAI|FIRECRAWL|SUPABASE_SERVICE)/);
     for (const filePath of listFiles(path.join(root, "src"))) {
       const source = readFileSync(filePath, "utf8");
