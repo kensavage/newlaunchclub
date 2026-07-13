@@ -29,8 +29,8 @@ export async function POST(request: Request) {
       userAgent: request.headers.get("user-agent")
     });
 
-    if (acknowledgement.shouldDispatch && process.env.NETLIFY === "true") {
-      await wakeWorkflowConsumerBestEffort({ env });
+    if (acknowledgement.shouldDispatch) {
+      await wakeWorkflowConsumerBestEffort({ env, source: "intake" });
     }
 
     return NextResponse.json(acknowledgement.response, {

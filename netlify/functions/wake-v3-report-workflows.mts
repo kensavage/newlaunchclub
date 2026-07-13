@@ -2,7 +2,7 @@ import type { Config } from "@netlify/functions";
 import { wakeNetlifyWorkflowConsumer } from "../runtime/wakeup-client";
 
 export default async function wakeV3ReportWorkflows() {
-  await wakeNetlifyWorkflowConsumer();
+  await wakeNetlifyWorkflowConsumer({ source: "scheduled" });
 }
 
 export const config: Config = {

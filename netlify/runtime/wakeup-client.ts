@@ -1,6 +1,10 @@
 import type { ServerEnv } from "./env";
 import { getNetlifyRuntimeEnv } from "./env";
-import { sendWorkflowWakeup } from "../../src/lib/workflow/wakeup-runtime";
+import {
+  sendWorkflowWakeup,
+  type WorkflowWakeupLogger,
+  type WorkflowWakeupSource
+} from "../../src/lib/workflow/wakeup-runtime";
 
 export async function wakeNetlifyWorkflowConsumer(
   options: {
@@ -8,6 +12,8 @@ export async function wakeNetlifyWorkflowConsumer(
     fetcher?: typeof fetch;
     now?: Date;
     nonce?: string;
+    source?: WorkflowWakeupSource;
+    logger?: WorkflowWakeupLogger;
   } = {}
 ) {
   const env = options.env ?? getNetlifyRuntimeEnv();
@@ -17,7 +23,9 @@ export async function wakeNetlifyWorkflowConsumer(
     fallbackUrl: env.NEXT_PUBLIC_SITE_URL,
     fetcher: options.fetcher,
     now: options.now,
-    nonce: options.nonce
+    nonce: options.nonce,
+    source: options.source,
+    logger: options.logger
   });
 }
 

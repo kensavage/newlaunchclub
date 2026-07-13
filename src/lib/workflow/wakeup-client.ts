@@ -1,7 +1,11 @@
 import "server-only";
 import type { ServerEnv } from "@/lib/env";
 import { getServerEnv } from "@/lib/env";
-import { sendWorkflowWakeup } from "@/lib/workflow/wakeup-runtime";
+import {
+  sendWorkflowWakeup,
+  type WorkflowWakeupLogger,
+  type WorkflowWakeupSource
+} from "@/lib/workflow/wakeup-runtime";
 
 export async function wakeWorkflowConsumer(
   options: {
@@ -10,6 +14,8 @@ export async function wakeWorkflowConsumer(
     now?: Date;
     nonce?: string;
     baseUrl?: string;
+    source?: WorkflowWakeupSource;
+    logger?: WorkflowWakeupLogger;
   } = {}
 ) {
   const env = options.env ?? getServerEnv();
@@ -20,7 +26,9 @@ export async function wakeWorkflowConsumer(
     fallbackUrl: env.NEXT_PUBLIC_SITE_URL,
     fetcher: options.fetcher,
     now: options.now,
-    nonce: options.nonce
+    nonce: options.nonce,
+    source: options.source,
+    logger: options.logger
   });
 }
 

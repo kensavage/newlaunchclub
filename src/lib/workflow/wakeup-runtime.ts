@@ -6,6 +6,28 @@ export const WORKFLOW_WAKEUP_TIMESTAMP_HEADER = "x-launchclub-wakeup-timestamp";
 export const WORKFLOW_WAKEUP_NONCE_HEADER = "x-launchclub-wakeup-nonce";
 export const WORKFLOW_WAKEUP_SIGNATURE_HEADER = "x-launchclub-wakeup-signature";
 
+export type WorkflowWakeupSource = "intake" | "scheduled" | "continuation" | "unknown";
+export type WorkflowWakeupStage = "dispatch" | "receiver" | "processing";
+export type WorkflowWakeupOutcome = "attempted" | "accepted" | "rejected" | "failed";
+export type WorkflowWakeupSafeReason =
+  | "authentication_failed"
+  | "configuration_missing"
+  | "consumer_failed"
+  | "destination_invalid"
+  | "http_rejected"
+  | "request_failed";
+
+export interface WorkflowWakeupLogEntry {
+  event: "workflow_wakeup";
+  stage: WorkflowWakeupStage;
+  outcome: WorkflowWakeupOutcome;
+  source: WorkflowWakeupSource;
+  reason?: WorkflowWakeupSafeReason;
+  httpStatus?: number;
+}
+
+export type WorkflowWakeupLogger = (entry: WorkflowWakeupLogEntry) => void;
+
 export function createWorkflowWakeupHeaders(
   secret: string,
   options: { now?: Date; nonce?: string } = {}
@@ -78,20 +100,97 @@ export async function sendWorkflowWakeup(options: {
   fetcher?: typeof fetch;
   now?: Date;
   nonce?: string;
+  source?: WorkflowWakeupSource;
+  logger?: WorkflowWakeupLogger;
 }) {
-  if (!options.secret) throw new Error("Workflow wakeup authorization is not configured.");
-  const origin = resolveWorkflowWakeupOrigin(options);
-  const url = new URL(WORKFLOW_WAKEUP_PATH, origin);
-  const response = await (options.fetcher ?? fetch)(url, {
-    method: "POST",
-    headers: createWorkflowWakeupHeaders(options.secret, {
-      now: options.now,
-      nonce: options.nonce
-    }),
-    redirect: "error",
-    signal: AbortSignal.timeout(5_000)
-  });
-  if (!response.ok) throw new Error("Workflow consumer wakeup was not accepted.");
+  const source = options.source ?? "unknown";
+  emitWorkflowWakeupLog({
+    event: "workflow_wakeup",
+    stage: "dispatch",
+    outcome: "attempted",
+    source
+  }, options.logger);
+
+  try {
+    if (!options.secret) {
+      throw new WorkflowWakeupDispatchError(
+        "configuration_missing",
+        "Workflow wakeup authorization is not configured."
+      );
+    }
+    const origin = resolveWorkflowWakeupOrigin(options);
+    const url = new URL(WORKFLOW_WAKEUP_PATH, origin);
+    const response = await (options.fetcher ?? fetch)(url, {
+      method: "POST",
+      headers: createWorkflowWakeupHeaders(options.secret, {
+        now: options.now,
+        nonce: options.nonce
+      }),
+      redirect: "error",
+      signal: AbortSignal.timeout(5_000)
+    });
+    if (!response.ok) {
+      throw new WorkflowWakeupDispatchError(
+        "http_rejected",
+        "Workflow consumer wakeup was not accepted.",
+        response.status
+      );
+    }
+    emitWorkflowWakeupLog({
+      event: "workflow_wakeup",
+      stage: "dispatch",
+      outcome: "accepted",
+      source,
+      httpStatus: response.status
+    }, options.logger);
+  } catch (error) {
+    const failure = classifyWakeupDispatchFailure(error);
+    emitWorkflowWakeupLog({
+      event: "workflow_wakeup",
+      stage: "dispatch",
+      outcome: "failed",
+      source,
+      reason: failure.reason,
+      ...(failure.httpStatus ? { httpStatus: failure.httpStatus } : {})
+    }, options.logger);
+    throw error;
+  }
+}
+
+export function emitWorkflowWakeupLog(
+  entry: WorkflowWakeupLogEntry,
+  logger: WorkflowWakeupLogger = defaultWorkflowWakeupLogger
+) {
+  logger(entry);
+}
+
+function defaultWorkflowWakeupLogger(entry: WorkflowWakeupLogEntry) {
+  console.info(JSON.stringify(entry));
+}
+
+class WorkflowWakeupDispatchError extends Error {
+  constructor(
+    readonly reason: WorkflowWakeupSafeReason,
+    message: string,
+    readonly httpStatus?: number
+  ) {
+    super(message);
+    this.name = "WorkflowWakeupDispatchError";
+  }
+}
+
+function classifyWakeupDispatchFailure(error: unknown): {
+  reason: WorkflowWakeupSafeReason;
+  httpStatus?: number;
+} {
+  if (error instanceof WorkflowWakeupDispatchError) {
+    return { reason: error.reason, httpStatus: error.httpStatus };
+  }
+  if (error instanceof TypeError) return { reason: "request_failed" };
+  if (error instanceof Error && /destination|HTTPS|bare origin/i.test(error.message)) {
+    return { reason: "destination_invalid" };
+  }
+  return { reason: "request_failed" };
 }
 
 function sign(secret: string, timestamp: string, nonce: string) {

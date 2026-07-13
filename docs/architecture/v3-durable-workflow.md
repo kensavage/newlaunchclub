@@ -52,6 +52,10 @@ The Background Function accepts only timestamped HMAC wakeups signed with `WORKF
 
 Wakeups prefer a valid `DEPLOY_PRIME_URL` when deploy metadata is available. Netlify exposes only `URL`, `SITE_NAME`, and `SITE_ID` as automatic read-only variables inside the current Functions runtime, so the function uses the deploy-context-specific `NEXT_PUBLIC_SITE_URL` as a validated fallback. Both inputs must be bare HTTPS origins; plain HTTP is accepted only for a loopback development origin. No production host is hardcoded, and the obsolete `/api/internal/v3-workflow-wakeup` route is not called.
 
+The intake route attempts its best-effort wake only after the atomic intake transaction returns and only for newly created work. Runtime dispatch must not be gated on `NETLIFY`: Netlify defines that variable for builds, but it is not an automatic Functions runtime variable. Intake waits only for the Background Function edge acknowledgement, never for workflow execution, and a dispatch failure leaves the committed queue message available to the scheduled fallback.
+
+Wakeup logs are structured and privacy-safe. Dispatch logs identify `attempted`, `accepted`, or `failed` outcomes by source and may include only a safe reason or HTTP status. Receiver logs separately identify whether HMAC authentication was accepted or rejected, because an edge `202` confirms Background Function dispatch rather than handler completion. Logs never include the destination URL, nonce, signature, secret, workflow identifiers, email, queue payload, or raw error.
+
 The scheduled function only wakes the Background Function and performs no workflow step. Its five-minute source schedule is not active until the code is deliberately deployed. Netlify does not automatically run schedules in Deploy Previews; preview acceptance uses the Functions page **Run now** action.
 
 ## Cost Contract

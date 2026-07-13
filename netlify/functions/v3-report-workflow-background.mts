@@ -2,7 +2,10 @@ import { getNetlifyRuntimeEnv } from "../runtime/env";
 import { getNetlifyWorkflowQueue, getNetlifyWorkflowStore } from "../runtime/workflow-runtime";
 import { wakeNetlifyWorkflowConsumerBestEffort } from "../runtime/wakeup-client";
 import { WorkflowQueueConsumer } from "../../src/lib/workflow/queue-consumer-runtime";
-import { verifyWorkflowWakeupRequest } from "../../src/lib/workflow/wakeup-runtime";
+import {
+  emitWorkflowWakeupLog,
+  verifyWorkflowWakeupRequest
+} from "../../src/lib/workflow/wakeup-runtime";
 
 export default async function consumeV3WorkflowQueue(request: Request) {
   const env = getNetlifyRuntimeEnv();
@@ -13,7 +16,23 @@ export default async function consumeV3WorkflowQueue(request: Request) {
         ttlSeconds: env.WORKFLOW_WAKEUP_TTL_SECONDS
       })
     : false;
-  if (!authorized) return new Response("Not found", { status: 404 });
+  if (!authorized) {
+    emitWorkflowWakeupLog({
+      event: "workflow_wakeup",
+      stage: "receiver",
+      outcome: "rejected",
+      source: "unknown",
+      reason: "authentication_failed"
+    });
+    return new Response("Not found", { status: 404 });
+  }
+
+  emitWorkflowWakeupLog({
+    event: "workflow_wakeup",
+    stage: "receiver",
+    outcome: "accepted",
+    source: "unknown"
+  });
 
   try {
     const consumer = new WorkflowQueueConsumer(getNetlifyWorkflowStore(env), queue, {
@@ -23,9 +42,17 @@ export default async function consumeV3WorkflowQueue(request: Request) {
       maximumRuntimeMilliseconds: env.WORKFLOW_CONSUMER_MAX_RUNTIME_SECONDS * 1_000
     });
     const result = await consumer.consume();
-    if (result.needsWake) await wakeNetlifyWorkflowConsumerBestEffort({ env });
+    if (result.needsWake) {
+      await wakeNetlifyWorkflowConsumerBestEffort({ env, source: "continuation" });
+    }
   } catch {
-    console.error("V3 workflow queue processing stopped safely; the durable message remains recoverable.");
+    emitWorkflowWakeupLog({
+      event: "workflow_wakeup",
+      stage: "processing",
+      outcome: "failed",
+      source: "unknown",
+      reason: "consumer_failed"
+    });
   }
 
   return new Response(null, { status: 202 });
