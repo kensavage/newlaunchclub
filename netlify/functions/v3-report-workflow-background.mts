@@ -1,13 +1,12 @@
-import { getServerEnv } from "../../src/lib/env";
-import { WorkflowQueueConsumer } from "../../src/lib/workflow/queue-consumer";
-import { getWorkflowQueue } from "../../src/lib/workflow/queue-factory";
-import { getWorkflowStore } from "../../src/lib/workflow/store-factory";
-import { verifyWorkflowWakeupRequest, WORKFLOW_WAKEUP_PATH } from "../../src/lib/workflow/wakeup-auth";
-import { wakeWorkflowConsumerBestEffort } from "../../src/lib/workflow/wakeup-client";
+import { getNetlifyRuntimeEnv } from "../runtime/env";
+import { getNetlifyWorkflowQueue, getNetlifyWorkflowStore } from "../runtime/workflow-runtime";
+import { wakeNetlifyWorkflowConsumerBestEffort } from "../runtime/wakeup-client";
+import { WorkflowQueueConsumer } from "../../src/lib/workflow/queue-consumer-runtime";
+import { verifyWorkflowWakeupRequest } from "../../src/lib/workflow/wakeup-runtime";
 
 export default async function consumeV3WorkflowQueue(request: Request) {
-  const env = getServerEnv();
-  const queue = getWorkflowQueue();
+  const env = getNetlifyRuntimeEnv();
+  const queue = getNetlifyWorkflowQueue(env);
   const authorized = env.WORKFLOW_WAKEUP_SECRET
     ? await verifyWorkflowWakeupRequest(request, queue, {
         secret: env.WORKFLOW_WAKEUP_SECRET,
@@ -17,14 +16,14 @@ export default async function consumeV3WorkflowQueue(request: Request) {
   if (!authorized) return new Response("Not found", { status: 404 });
 
   try {
-    const consumer = new WorkflowQueueConsumer(getWorkflowStore(), queue, {
+    const consumer = new WorkflowQueueConsumer(getNetlifyWorkflowStore(env), queue, {
       batchSize: env.WORKFLOW_QUEUE_BATCH_SIZE,
       visibilityTimeoutSeconds: env.WORKFLOW_QUEUE_VISIBILITY_TIMEOUT_SECONDS,
       leaseSeconds: env.WORKFLOW_LEASE_SECONDS,
       maximumRuntimeMilliseconds: env.WORKFLOW_CONSUMER_MAX_RUNTIME_SECONDS * 1_000
     });
     const result = await consumer.consume();
-    if (result.needsWake) await wakeWorkflowConsumerBestEffort({ env });
+    if (result.needsWake) await wakeNetlifyWorkflowConsumerBestEffort({ env });
   } catch {
     console.error("V3 workflow queue processing stopped safely; the durable message remains recoverable.");
   }
@@ -33,6 +32,5 @@ export default async function consumeV3WorkflowQueue(request: Request) {
 }
 
 export const config = {
-  background: true,
-  path: WORKFLOW_WAKEUP_PATH
+  background: true
 };

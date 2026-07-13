@@ -6,6 +6,7 @@ import type { ServerEnv } from "@/lib/env";
 import { getWorkflowQueue, setWorkflowQueueForTests } from "@/lib/workflow/queue-factory";
 import { WorkflowConfigurationError } from "@/lib/workflow/store";
 import { wakeWorkflowConsumer } from "@/lib/workflow/wakeup-client";
+import { resolveWorkflowWakeupOrigin, WORKFLOW_WAKEUP_PATH } from "@/lib/workflow/wakeup-runtime";
 
 const root = process.cwd();
 const migration = readFileSync(path.join(root, "supabase/migrations/0004_v3_supabase_queue.sql"), "utf8");
@@ -37,8 +38,26 @@ describe("workflow queue security boundaries", () => {
   });
 
   it("keeps the scheduled wakeup payload-free and separate from administration", () => {
-    expect(scheduledFunction).toContain("wakeWorkflowConsumer");
+    expect(scheduledFunction).toContain("wakeNetlifyWorkflowConsumer");
     expect(scheduledFunction).not.toMatch(/workflowId|reportRequestId|reportId|WORKFLOW_ADMIN_SECRET/);
+  });
+
+  it("targets the exact Background Function path with no stale internal route", () => {
+    expect(WORKFLOW_WAKEUP_PATH).toBe("/.netlify/functions/v3-report-workflow-background");
+    expect(backgroundFunction).not.toContain("/api/internal/v3-workflow-wakeup");
+    expect(scheduledFunction).not.toContain("/api/internal/v3-workflow-wakeup");
+  });
+
+  it("prefers the deploy origin and validates the configured fallback", () => {
+    expect(resolveWorkflowWakeupOrigin({
+      deployPrimeUrl: "https://deploy-preview-1--launchclub-new.netlify.app",
+      fallbackUrl: "https://fallback.example"
+    })).toBe("https://deploy-preview-1--launchclub-new.netlify.app");
+    expect(resolveWorkflowWakeupOrigin({ fallbackUrl: "https://fallback.example" })).toBe("https://fallback.example");
+    expect(resolveWorkflowWakeupOrigin({ fallbackUrl: "http://localhost:3000" })).toBe("http://localhost:3000");
+    expect(() => resolveWorkflowWakeupOrigin({ fallbackUrl: "http://remote.example" })).toThrow(/HTTPS/);
+    expect(() => resolveWorkflowWakeupOrigin({ fallbackUrl: "https://user:pass@fallback.example" })).toThrow(/bare origin/);
+    expect(() => resolveWorkflowWakeupOrigin({ fallbackUrl: "https://fallback.example/path" })).toThrow(/bare origin/);
   });
 
   it("keeps queue and service-role credentials out of every client component", () => {
@@ -59,7 +78,9 @@ describe("workflow queue security boundaries", () => {
   });
 
   it("sends a signed empty wakeup with no workflow or administrator data", async () => {
-    const fetcher = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
+    vi.stubEnv("DEPLOY_PRIME_URL", "https://deploy-preview-1--launchclub-new.netlify.app");
+    const fetcher = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
+      expect(String(input)).toBe(`https://deploy-preview-1--launchclub-new.netlify.app${WORKFLOW_WAKEUP_PATH}`);
       expect(init?.method).toBe("POST");
       expect(init?.body).toBeUndefined();
       expect(JSON.stringify(init?.headers)).not.toMatch(/workflowId|reportId|WORKFLOW_ADMIN_SECRET/);
@@ -75,6 +96,16 @@ describe("workflow queue security boundaries", () => {
       nonce: "nonce_123456789012345678901234"
     });
     expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("does not hardcode a production origin in either runtime entry point", () => {
+    const runtimeSources = [
+      backgroundFunction,
+      scheduledFunction,
+      readFileSync(path.join(root, "netlify/runtime/wakeup-client.ts"), "utf8"),
+      readFileSync(path.join(root, "src/lib/workflow/wakeup-runtime.ts"), "utf8")
+    ].join("\n");
+    expect(runtimeSources).not.toContain("https://launchclub.ai");
   });
 });
 

@@ -8,6 +8,7 @@ Do not run this checklist against production.
 - Apply migrations `0001`, `0002`, `0003`, and `0004` only to that project.
 - Confirm `v3_report_workflows` is a Basic logged queue and `pgmq_public` is not exposed.
 - Configure preview-only `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `REPORT_ACCESS_TOKEN_SECRET`, `REPORT_RATE_LIMIT_SALT`, `WORKFLOW_ADMIN_SECRET`, `WORKFLOW_WAKEUP_SECRET`, and `NEXT_PUBLIC_SITE_URL`.
+- Set `NEXT_PUBLIC_SITE_URL` to the exact Deploy Preview origin. The scheduled function prefers valid `DEPLOY_PRIME_URL` metadata when present and otherwise uses this validated, context-specific fallback.
 - Keep `REPORT_USE_MEMORY_STORE=false` and `REPORT_USE_INLINE_WORKER=false`.
 - Confirm no preview variable points to a production URL, project, key, or domain.
 - Confirm no secret is present in a `NEXT_PUBLIC_*` variable or browser bundle.
@@ -19,8 +20,8 @@ Do not run this checklist against production.
 2. Force queue send failure in the isolated database and confirm the complete intake rolls back.
 3. Repeat the same intake and confirm no duplicate workflow or actionable queue message.
 4. Confirm the queue message contains only five identifiers plus `requestedAt` and is below 32 KB.
-5. Use **Run now** on `wake-v3-report-workflows`; confirm it sends no queue contents.
-6. Confirm the Background Function rejects missing, expired, invalid, and replayed HMAC wakeups.
+5. Use **Run now** on `wake-v3-report-workflows`; confirm it sends an empty signed POST to `/.netlify/functions/v3-report-workflow-background` on the same Deploy Preview and sends no queue contents.
+6. Confirm the Background Function rejects missing, expired, invalid, and replayed HMAC wakeups and that no active code calls `/api/internal/v3-workflow-wakeup`.
 7. Confirm one delivery runs only the next eligible foundation step.
 8. Deliver the same message twice and confirm successful steps retain one attempt.
 9. Simulate a crash after step success and before queue acknowledgement; confirm redelivery advances without rerunning that step.

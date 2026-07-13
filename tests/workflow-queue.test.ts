@@ -10,7 +10,12 @@ import {
 import { WorkflowQueueConsumer } from "@/lib/workflow/queue-consumer";
 import { DurableWorkflowRunner } from "@/lib/workflow/runner";
 import type { FailureClassification, WorkflowStepKey } from "@/lib/workflow/schema";
-import { createWorkflowWakeupHeaders, verifyWorkflowWakeupRequest, WORKFLOW_WAKEUP_PATH } from "@/lib/workflow/wakeup-auth";
+import {
+  createWorkflowWakeupHeaders,
+  verifyWorkflowWakeupRequest,
+  WORKFLOW_WAKEUP_PATH,
+  WORKFLOW_WAKEUP_SIGNATURE_HEADER
+} from "@/lib/workflow/wakeup-auth";
 
 const reportRequestId = "11111111-1111-4111-8111-111111111111";
 const reportId = "22222222-2222-4222-8222-222222222222";
@@ -163,6 +168,33 @@ describe("Supabase Queue workflow transport", () => {
     expect(await verifyWorkflowWakeupRequest(request(), queue, { secret, ttlSeconds: 300, now: start })).toBe(true);
     expect(await verifyWorkflowWakeupRequest(request(), queue, { secret, ttlSeconds: 300, now: start })).toBe(false);
     expect(await verifyWorkflowWakeupRequest(new Request(`https://preview.example${WORKFLOW_WAKEUP_PATH}`, { method: "POST" }), queue, { secret, ttlSeconds: 300, now: start })).toBe(false);
+
+    const expiredHeaders = createWorkflowWakeupHeaders(secret, {
+      now: new Date(start.getTime() - 301_000),
+      nonce: "expired_123456789012345678901234"
+    });
+    expect(await verifyWorkflowWakeupRequest(new Request(`https://preview.example${WORKFLOW_WAKEUP_PATH}`, {
+      method: "POST",
+      headers: expiredHeaders
+    }), queue, { secret, ttlSeconds: 300, now: start })).toBe(false);
+
+    const malformedHeaders = new Headers(createWorkflowWakeupHeaders(secret, {
+      now: start,
+      nonce: "malformed_123456789012345678901"
+    }));
+    malformedHeaders.set(WORKFLOW_WAKEUP_SIGNATURE_HEADER, "not-a-signature");
+    expect(await verifyWorkflowWakeupRequest(new Request(`https://preview.example${WORKFLOW_WAKEUP_PATH}`, {
+      method: "POST",
+      headers: malformedHeaders
+    }), queue, { secret, ttlSeconds: 300, now: start })).toBe(false);
+
+    expect(await verifyWorkflowWakeupRequest(new Request(`https://preview.example${WORKFLOW_WAKEUP_PATH}`, {
+      method: "GET",
+      headers: createWorkflowWakeupHeaders(secret, {
+        now: start,
+        nonce: "wrong_method_123456789012345678"
+      })
+    }), queue, { secret, ttlSeconds: 300, now: start })).toBe(false);
   });
 
 });

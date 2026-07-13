@@ -1,8 +1,8 @@
 import type { Config } from "@netlify/functions";
-import { wakeWorkflowConsumer } from "../../src/lib/workflow/wakeup-client";
+import { wakeNetlifyWorkflowConsumer } from "../runtime/wakeup-client";
 
 export default async function wakeV3ReportWorkflows() {
-  await wakeWorkflowConsumer();
+  await wakeNetlifyWorkflowConsumer();
 }
 
 export const config: Config = {

@@ -32,6 +32,8 @@ The successful PR3 state is `ready_for_provider_research`, not `completed`.
 
 Delivery is at least once. The consumer reads a small batch with a visibility timeout and validates each message against canonical workflow state. It runs only the next eligible existing runner step, then either archives the message after terminal PR3 preparation or makes it visible for the next step. It stops before the Netlify execution limit and reserves cleanup time.
 
+The standalone Netlify functions do not import Next.js boundary modules. Shared queue, consumer, Supabase-store, environment-schema, HMAC, and URL-construction code has runtime-neutral implementations. The existing Next.js entry modules remain protected by `server-only` and re-export only the neutral implementations needed by the application. The Netlify environment reader and durable-store factory live under `netlify/runtime` and are reachable only from the function entry points.
+
 Duplicate delivery is harmless. Completed steps are checked in Supabase before execution. A crash after durable step success but before queue release or archive causes redelivery, but the completed step is not rerun. Simultaneous intake and scheduled wakeups are safe because `pgmq` visibility, workflow leases, stable step identities, and fencing tokens all apply.
 
 Paused and cancelled workflows do no additional work. Old messages are archived; resume and administrator retry create new idempotent messages inside the same administrator transaction.
@@ -46,7 +48,9 @@ Terminal failures are copied to `workflow_queue_dead_letters` and the original q
 
 ## Wakeup Security
 
-The Background Function accepts only timestamped HMAC wakeups signed with `WORKFLOW_WAKEUP_SECRET`. Each request has a random nonce whose SHA-256 hash is consumed once in `workflow_wakeup_nonces`; a replay is rejected. Wakeups contain no queue or workflow payload. The wakeup secret is independent from `WORKFLOW_ADMIN_SECRET` and grants no administrator capability.
+The Background Function accepts only timestamped HMAC wakeups signed with `WORKFLOW_WAKEUP_SECRET` at `/.netlify/functions/v3-report-workflow-background`. Each request has a random nonce whose SHA-256 hash is consumed once in `workflow_wakeup_nonces`; a replay is rejected. Wakeups contain no queue or workflow payload. The wakeup secret is independent from `WORKFLOW_ADMIN_SECRET` and grants no administrator capability.
+
+Wakeups prefer a valid `DEPLOY_PRIME_URL` when deploy metadata is available. Netlify exposes only `URL`, `SITE_NAME`, and `SITE_ID` as automatic read-only variables inside the current Functions runtime, so the function uses the deploy-context-specific `NEXT_PUBLIC_SITE_URL` as a validated fallback. Both inputs must be bare HTTPS origins; plain HTTP is accepted only for a loopback development origin. No production host is hardcoded, and the obsolete `/api/internal/v3-workflow-wakeup` route is not called.
 
 The scheduled function only wakes the Background Function and performs no workflow step. Its five-minute source schedule is not active until the code is deliberately deployed. Netlify does not automatically run schedules in Deploy Previews; preview acceptance uses the Functions page **Run now** action.
 

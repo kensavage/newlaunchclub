@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:functions": "vitest run tests/netlify-function-runtime.test.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "env:check": "node scripts/check-provider-env.mjs",
