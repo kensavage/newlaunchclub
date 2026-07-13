@@ -5,14 +5,15 @@ import type { PublicReportJob } from "@/lib/report/schema";
 
 export function ProgressTimeline({ job }: { job: PublicReportJob | null }) {
   if (!job) return null;
+  const currentStage =
+    job.steps.find((step) => step.status === "running" || step.status === "failed") ??
+    [...job.steps].reverse().find((step) => step.status === "complete");
 
   return (
     <div className="progress-panel" aria-live="polite">
       <div className="progress-header">
-        <span>{job.progress}%</span>
-        <div className="progress-bar" aria-hidden="true">
-          <div style={{ width: `${job.progress}%` }} />
-        </div>
+        <span>Current stage</span>
+        <strong>{currentStage?.label ?? "Request received"}</strong>
       </div>
       <ol className="timeline">
         {job.steps.map((step) => {

@@ -81,7 +81,13 @@ describe("report intake and secure access routes", () => {
     const secureBody = await secureResponse.json();
     expect(secureResponse.status).toBe(200);
     expect(secureBody.job.publicId).toBe(acknowledgement.reportAccessToken);
-    expect(secureBody.job.progress).toBe(94);
+    expect(secureBody.job.progress).toBeNull();
+    expect(secureBody.job.currentStep).toBe("crawl");
+    expect(secureBody.job.steps).toEqual([
+      expect.objectContaining({ label: "Request received", status: "complete" }),
+      expect.objectContaining({ label: "Preparing research", status: "running" })
+    ]);
+    expect(JSON.stringify(secureBody)).not.toMatch(/94|ready_for_provider_research|research_ready/);
     expect(JSON.stringify(secureBody)).not.toContain("owner@example.com");
 
     const hiddenWorkerIdResponse = await getReport("a".repeat(18));

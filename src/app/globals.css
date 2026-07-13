@@ -2426,24 +2426,19 @@ h1 {
 .progress-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  color: rgba(255, 255, 255, 0.72);
-  font-weight: 800;
+  justify-content: space-between;
+  gap: 16px;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
-.progress-bar {
-  flex: 1;
-  height: 10px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.progress-bar div {
-  height: 100%;
-  background: var(--lc-green);
-  transition: width 180ms ease;
+.progress-header strong {
+  color: #ffffff;
+  font-size: 15px;
+  text-align: right;
+  text-transform: none;
 }
 
 .timeline {

@@ -226,7 +226,7 @@ export const publicReportJobSchema = z.object({
   publicId: z.string(),
   status: reportStatusSchema,
   currentStep: reportStepIdSchema,
-  progress: z.number().min(0).max(100),
+  progress: z.number().min(0).max(100).nullable(),
   steps: z.array(reportStepSchema),
   errorSummary: z.string().nullable()
 });

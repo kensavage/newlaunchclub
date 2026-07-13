@@ -42,7 +42,7 @@ export function createPublicReportResponse(
       publicId,
       status: job.status,
       currentStep: job.currentStep,
-      progress: job.progress,
+      progress: job.status === "complete" ? 100 : null,
       steps: job.steps.map((step) => ({
         id: step.id,
         label: step.label,
@@ -73,7 +73,7 @@ export function createPublicWorkflowResponse(
       publicId,
       status,
       currentStep: progress.currentStep,
-      progress: progress.percent,
+      progress: null,
       steps: progress.steps.map((step) => ({
         ...step,
         detail: step.detail ?? undefined

@@ -33,6 +33,7 @@ describe("public report sanitization", () => {
     const serialized = JSON.stringify(response);
 
     expect(response.job.errorSummary).toBe(PUBLIC_REPORT_FAILURE_MESSAGE);
+    expect(response.job.progress).toBeNull();
     expect(serialized).not.toContain("visitorHash");
     expect(serialized).not.toContain("private-visitor-hash");
     expect(serialized).not.toContain("normalizedUrl");
@@ -69,6 +70,7 @@ describe("public report sanitization", () => {
     const response = createPublicReportResponse(job, null, { publicId: secureAccessKey });
 
     expect(response.job.publicId).toBe(secureAccessKey);
+    expect(response.job.progress).toBeNull();
     expect(JSON.stringify(response)).not.toContain("internal-worker-id");
   });
 });

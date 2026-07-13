@@ -212,7 +212,6 @@ export interface SafeWorkflowProgress {
     | "partially_complete"
     | "complete"
     | "failed";
-  percent: number;
   currentStep: string;
   steps: Array<{
     id: string;

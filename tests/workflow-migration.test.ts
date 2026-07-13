@@ -32,6 +32,18 @@ describe("PR3 isolated PostgreSQL migration", () => {
     `);
     expect(counts.rows[0]).toEqual({ workflows: 1, steps: 5, outbox: 1, legacy_jobs: 0, budget_cents: 400 });
 
+    const publicProgress = await db.query<{ progress: { currentStep: string; steps: Array<{ label: string; status: string }> } }>(`
+      select get_public_workflow_progress('${result.rows[0]!.report_request_id}') progress
+    `);
+    expect(publicProgress.rows[0]?.progress).toMatchObject({
+      currentStep: "crawl",
+      steps: [
+        { label: "Request received", status: "complete" },
+        { label: "Preparing research", status: "running" }
+      ]
+    });
+    expect(JSON.stringify(publicProgress.rows[0]?.progress)).not.toMatch(/94|ready_for_provider_research|research_ready/);
+
     const duplicate = await db.query<{ reused: boolean }>(intakeSql());
     expect(duplicate.rows[0]?.reused).toBe(true);
     expect((await db.query<{ count: number }>("select count(*)::integer count from research_workflows")).rows[0]?.count).toBe(1);

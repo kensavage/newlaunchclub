@@ -663,8 +663,6 @@ create or replace function public.get_public_workflow_progress(p_report_request_
 returns jsonb language sql stable security definer set search_path = '' as $$
   with workflow as (
     select * from public.research_workflows where report_request_id = p_report_request_id and workflow_type = 'initial_report' order by workflow_version desc limit 1
-  ), counts as (
-    select count(*) filter (where status = 'succeeded')::integer complete_count from public.research_steps where workflow_id = (select id from workflow)
   )
   select jsonb_build_object(
     'state', case
@@ -675,18 +673,18 @@ returns jsonb language sql stable security definer set search_path = '' as $$
       when w.status in ('failed', 'cancelled') then 'failed'
       when w.status in ('queued', 'dispatch_pending') then 'queued'
       else 'preparing_research' end,
-    'percent', case when w.status = 'ready_for_provider_research' then 94 else greatest(5, least(90, c.complete_count * 18 + case when w.status = 'running' then 8 else 0 end)) end,
-    'currentStep', case w.current_phase
-      when 'initialize_workflow' then 'crawl' when 'validate_intake_references' then 'analysis'
-      when 'establish_cost_budget' then 'keywords' when 'prepare_provider_research' then 'reddit' else 'synthesis' end,
-    'steps', (select jsonb_agg(jsonb_build_object(
-      'id', case rs.step_key when 'initialize_workflow' then 'crawl' when 'validate_intake_references' then 'analysis' when 'establish_cost_budget' then 'keywords' when 'prepare_provider_research' then 'reddit' else 'synthesis' end,
-      'label', case rs.step_key when 'initialize_workflow' then 'Preparing secure research workflow' when 'validate_intake_references' then 'Validating report intake' when 'establish_cost_budget' then 'Confirming research budget' when 'prepare_provider_research' then 'Preparing provider research' else 'Research workflow ready' end,
-      'status', case when rs.status = 'succeeded' then 'complete' when rs.status in ('running', 'leased') then 'running' when rs.status = 'failed_terminal' then 'failed' else 'pending' end,
-      'detail', null
-    ) order by rs.created_at) from public.research_steps rs where rs.workflow_id = w.id),
+    'currentStep', case when w.status in ('failed', 'cancelled') then 'failed' else 'crawl' end,
+    'steps', jsonb_build_array(
+      jsonb_build_object('id', 'queued', 'label', 'Request received', 'status', 'complete', 'detail', null),
+      jsonb_build_object(
+        'id', case when w.status in ('failed', 'cancelled') then 'failed' else 'crawl' end,
+        'label', 'Preparing research',
+        'status', case when w.status in ('failed', 'cancelled') then 'failed' when w.status = 'completed' then 'complete' else 'running' end,
+        'detail', case when w.status in ('waiting_retry', 'paused') then 'Preparation is temporarily delayed.' else null end
+      )
+    ),
     'errorSummary', case when w.status = 'failed' then 'The research workflow could not be prepared. Please try again.' else null end
-  ) from workflow w cross join counts c;
+  ) from workflow w;
 $$;
 
 create or replace function public.admin_transition_research_workflow(p_workflow_id uuid, p_command text, p_step_key text, p_actor_id text, p_now timestamptz default now())

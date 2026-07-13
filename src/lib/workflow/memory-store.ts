@@ -228,7 +228,7 @@ export class MemoryWorkflowStore implements WorkflowStore {
 
   async getPublicProgress(reportRequestId: string) {
     const workflow = await this.getWorkflowByReportRequest(reportRequestId);
-    return workflow ? mapPublicProgress(workflow, this.stepsFor(workflow.id)) : null;
+    return workflow ? mapPublicProgress(workflow) : null;
   }
 
   async listWorkflows(filter: WorkflowListFilter = {}) {
@@ -811,23 +811,8 @@ export function resetMemoryWorkflowStoreForTests() {
   globalThis.__launchClubWorkflowStore = undefined;
 }
 
-export function mapPublicProgress(workflow: WorkflowRecord, steps: WorkflowStepRecord[]): SafeWorkflowProgress {
-  const completed = steps.filter((step) => step.status === "succeeded").length;
+export function mapPublicProgress(workflow: WorkflowRecord): SafeWorkflowProgress {
   const failed = workflow.status === "failed";
-  const labels: Record<WorkflowStepKey, string> = {
-    initialize_workflow: "Preparing secure research workflow",
-    validate_intake_references: "Validating report intake",
-    establish_cost_budget: "Confirming research budget",
-    prepare_provider_research: "Preparing provider research",
-    mark_ready_for_provider_research: "Research workflow ready"
-  };
-  const ids: Record<WorkflowStepKey, "crawl" | "analysis" | "keywords" | "reddit" | "synthesis"> = {
-    initialize_workflow: "crawl",
-    validate_intake_references: "analysis",
-    establish_cost_budget: "keywords",
-    prepare_provider_research: "reddit",
-    mark_ready_for_provider_research: "synthesis"
-  };
   const state: SafeWorkflowProgress["state"] =
     workflow.status === "ready_for_provider_research" ? "research_ready" :
     workflow.status === "waiting_retry" || workflow.status === "paused" ? "temporarily_delayed" :
@@ -835,16 +820,28 @@ export function mapPublicProgress(workflow: WorkflowRecord, steps: WorkflowStepR
     workflow.status === "completed" ? "complete" :
     failed || workflow.status === "cancelled" ? "failed" :
     workflow.status === "queued" || workflow.status === "dispatch_pending" ? "queued" : "preparing_research";
+  const preparationStatus =
+    state === "failed" ? "failed" as const : state === "complete" ? "complete" as const : "running" as const;
+  const preparationDetail =
+    state === "temporarily_delayed" ? "Preparation is temporarily delayed." : null;
+
   return {
     state,
-    percent: state === "research_ready" ? 94 : Math.max(5, Math.min(90, completed * 18 + (workflow.status === "running" ? 8 : 0))),
-    currentStep: state === "research_ready" ? "synthesis" : ids[workflow.currentPhase === "provider_research" ? "mark_ready_for_provider_research" : workflow.currentPhase],
-    steps: steps.map((step) => ({
-      id: ids[step.stepKey],
-      label: labels[step.stepKey],
-      status: step.status === "succeeded" ? "complete" : step.status === "running" || step.status === "leased" ? "running" : step.status === "failed_terminal" ? "failed" : "pending",
-      detail: null
-    })),
+    currentStep: preparationStatus === "failed" ? "failed" : "crawl",
+    steps: [
+      {
+        id: "queued",
+        label: "Request received",
+        status: "complete",
+        detail: null
+      },
+      {
+        id: preparationStatus === "failed" ? "failed" : "crawl",
+        label: "Preparing research",
+        status: preparationStatus,
+        detail: preparationDetail
+      }
+    ],
     errorSummary: failed ? "The research workflow could not be prepared. Please try again." : null
   };
 }

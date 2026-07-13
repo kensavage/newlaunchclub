@@ -138,6 +138,14 @@ describe("durable workflow store", () => {
     const workflow = await createWorkflow(store);
     const progress = await store.getPublicProgress(workflow.reportRequestId);
     expect(JSON.stringify(progress)).not.toMatch(/lease|attempt|cost|safeCode|reportRequestId/i);
+    expect(progress).toMatchObject({
+      currentStep: "crawl",
+      steps: [
+        { label: "Request received", status: "complete" },
+        { label: "Preparing research", status: "running" }
+      ]
+    });
+    expect(JSON.stringify(progress)).not.toMatch(/94|ready_for_provider_research|Research workflow ready/);
     const oversized = { ...store.snapshot().outbox[0]!.payload, extra: "x".repeat(40_000) } as unknown as WorkflowEventPayload;
     expect(() => assertWorkflowEventPayloadSize(oversized)).toThrow(/payload/i);
   });

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("visitor submits a URL and work email and sees the durable research workflow become ready", async ({
+test("visitor submits a URL and sees truthful stage-based preparation progress", async ({
   page
 }) => {
   await page.goto("/");
@@ -9,11 +9,16 @@ test("visitor submits a URL and work email and sees the durable research workflo
   await page.locator("#work-email").fill("owner@launchclub.ai");
   await page.getByRole("button", { name: /run report/i }).click();
 
-  await expect(page.getByText("Research workflow ready")).toBeVisible({
+  await expect(page.getByText("Preparing research").first()).toBeVisible({
     timeout: 20_000
   });
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByText("94%")).toBeVisible();
+  const progressPanel = page.locator(".progress-panel");
+  await expect(progressPanel).toContainText("Request received");
+  await expect(progressPanel).toContainText("Preparing research");
+  await expect(progressPanel).not.toContainText(/\d+%/);
+  await expect(progressPanel).not.toContainText(/Researching visibility|Analyzing findings|Building report|Quality review|Report ready/i);
+  await expect(progressPanel).not.toContainText(/ready_for_provider_research|research_ready/i);
   await expect(page.getByText(/Firecrawl|Ahrefs|OpenAI|Reddit API/i)).toHaveCount(0);
 });
 
