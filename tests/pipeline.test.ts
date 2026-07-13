@@ -34,9 +34,29 @@ describe("report worker pipeline", () => {
     expect(report).not.toBeNull();
     const parsedReport = opportunityReportSchema.parse(report);
     expect(parsedReport.keywordOpportunities.length).toBeGreaterThanOrEqual(8);
+    expect(parsedReport.keywordOpportunities.every((item) => item.monthlySearchVolume === null)).toBe(true);
+    expect(
+      parsedReport.keywordOpportunities.every(
+        (item) => item.evidence.monthlySearchVolume.evidenceStatus === "Not measured"
+      )
+    ).toBe(true);
     expect(parsedReport.aiCitationOpportunities).toHaveLength(4);
     expect(parsedReport.aiCitationOpportunities.every((item) => item.isSimulation)).toBe(true);
-    expect(parsedReport.evidenceSummary.aiSearchSource).toMatch(/simulated opportunity/i);
+    expect(
+      parsedReport.aiCitationOpportunities.every(
+        (item) => item.evidence.evidenceStatus === "Not measured"
+      )
+    ).toBe(true);
+    expect(parsedReport.redditOpportunities.every((item) => item.estimatedMonthlyViews === null)).toBe(true);
+    expect(
+      parsedReport.redditOpportunities.every(
+        (item) => item.evidence.discussion.evidenceStatus === "Not measured"
+      )
+    ).toBe(true);
+    expect(parsedReport.businessEvidence.evidenceStatus).toBe("Not measured");
+    expect(parsedReport.opportunityScoreEvidence.evidenceStatus).toBe("Not measured");
+    expect(parsedReport.claims.every((claim) => claim.evidenceStatus !== "Measured")).toBe(true);
+    expect(parsedReport.evidenceSummary.aiSearchSource).toMatch(/planning simulations/i);
     expect(parsedReport.evidenceSummary.crawlSummary).toMatch(/homepage \+ 1 linked internal page/i);
   });
 

@@ -4,6 +4,7 @@ import type {
   RedditOpportunity,
   VisibilitySnapshot
 } from "@/lib/report/schema";
+import { createNotMeasuredEvidence } from "@/lib/report/evidence";
 
 export function getDefaultPricingTiers(): PricingTier[] {
   return [
@@ -61,20 +62,21 @@ export function createVisibilitySnapshot({
   redditOpportunities: RedditOpportunity[];
   keywordTraffic: number;
 }): VisibilitySnapshot {
-  const redditSignals = redditOpportunities.filter((opportunity) => opportunity.riskLevel !== "High").length;
-  const estimatedMonthlyOpportunityTraffic =
-    keywordTraffic > 0
-      ? keywordTraffic
-      : redditOpportunities.reduce((sum, opportunity) => sum + (opportunity.estimatedMonthlyViews ?? 0), 0);
+  void opportunityScore;
+  void redditOpportunities;
+  void keywordTraffic;
 
   return {
-    currentAiVisibilityScore: Math.max(8, Math.min(42, Math.round(opportunityScore * 0.36))),
-    targetAiVisibilityScore: Math.max(72, Math.min(96, opportunityScore + 10)),
-    currentRedditPresenceScore: Math.max(6, Math.min(38, redditSignals * 9 + 8)),
-    targetRedditPresenceScore: Math.max(70, Math.min(94, redditSignals * 12 + 58)),
-    estimatedMonthlyOpportunityTraffic,
+    currentAiVisibilityScore: null,
+    targetAiVisibilityScore: null,
+    currentRedditPresenceScore: null,
+    targetRedditPresenceScore: null,
+    estimatedMonthlyOpportunityTraffic: null,
     summary:
-      "The current picture is a visibility gap: buyers can find competitor and community sources more easily than the submitted site. Launch Club closes that gap by publishing citable assets and participating where buyers already research."
+      "Live AI visibility, Reddit presence, and traffic projections were not measured for this report.",
+    evidence: createNotMeasuredEvidence(
+      "No supported live provider supplied current or target visibility scores or an opportunity traffic projection."
+    )
   };
 }
 

@@ -7,8 +7,12 @@ async function runReport(request: Request) {
     return Response.json({ error: "Missing publicId" }, { status: 400 });
   }
 
-  await runReportJob(body.publicId);
-  return Response.json({ ok: true }, { status: 202 });
+  try {
+    await runReportJob(body.publicId);
+    return Response.json({ ok: true }, { status: 202 });
+  } catch {
+    return Response.json({ error: "Report processing failed." }, { status: 500 });
+  }
 }
 
 export default runReport;

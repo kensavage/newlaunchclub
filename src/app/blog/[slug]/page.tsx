@@ -79,7 +79,7 @@ export default async function BlogArticlePage({
       <section className="blog-report-cta">
         <h2>See Where Reddit Is Talking To Your Prospects Without You</h2>
         <p>Generate your personalized AI Search &amp; Reddit Opportunity Report.</p>
-        <ReportGenerator variant="footer" />
+        <ReportGenerator variant="footer" source="blog_footer" />
       </section>
       <SiteFooter />
     </main>

@@ -1,15 +1,20 @@
 import Image from "next/image";
 import Link from "next/link";
+import type { Metadata } from "next";
 import { ReportViewer } from "@/components/report-viewer";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = {
+  robots: { index: false, follow: false, noarchive: true },
+  referrer: "no-referrer"
+};
 
 export default async function ReportPage({
   params
 }: {
   params: Promise<{ publicId: string }>;
 }) {
-  const { publicId } = await params;
+  const { publicId: reportAccessKey } = await params;
 
   return (
     <main className="report-shell">
@@ -23,7 +28,7 @@ export default async function ReportPage({
             Run another report
           </Link>
         </header>
-        <ReportViewer publicId={publicId} />
+        <ReportViewer reportAccessKey={reportAccessKey} />
       </div>
     </main>
   );

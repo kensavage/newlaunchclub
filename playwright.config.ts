@@ -20,6 +20,7 @@ export default defineConfig({
       "REPORT_USE_MOCK_PROVIDERS=true",
       "REPORT_USE_INLINE_WORKER=true",
       "REPORT_USE_MEMORY_STORE=true",
+      "REPORT_ACCESS_TOKEN_SECRET=playwright-only-secret-that-is-longer-than-thirty-two-characters",
       "npm run dev"
     ].join(" "),
     url: baseURL,

@@ -42,5 +42,6 @@ export function getKeywordPriority(volume: number | null, redditFit: "High" | "M
 }
 
 export function isAiOpportunitySimulationEnabled(enableRealAiChecks: boolean) {
-  return !enableRealAiChecks;
+  void enableRealAiChecks;
+  return true;
 }

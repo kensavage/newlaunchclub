@@ -8,6 +8,7 @@ import {
   createVisibilitySnapshot,
   getDefaultPricingTiers
 } from "@/lib/report/commercial";
+import { createNotMeasuredEvidence } from "@/lib/report/evidence";
 import type {
   AhrefsInsights,
   BusinessAnalysis,
@@ -114,11 +115,11 @@ export class MockProviderBundle implements ProviderBundle {
 
   async getKeywordMetrics(keywords: string[]): Promise<KeywordMetric[]> {
     await wait(20);
-    return keywords.slice(0, 20).map((keyword, index) => ({
+    return keywords.slice(0, 20).map((keyword) => ({
       keyword,
-      monthlySearchVolume: Math.max(40, 1200 - index * 47),
-      difficulty: Math.min(82, 18 + index * 3),
-      trafficPotential: Math.max(25, 1800 - index * 52),
+      monthlySearchVolume: null,
+      difficulty: null,
+      trafficPotential: null,
       intent: keyword.includes("reviews") || keyword.includes("alternatives") ? "Decision" : "Discovery"
     }));
   }
@@ -171,24 +172,24 @@ export class MockProviderBundle implements ProviderBundle {
         title: "What are people using to track ChatGPT and Perplexity mentions?",
         subreddit: "r/SEO",
         url: "https://www.reddit.com/r/SEO/comments/mock_ai_search_mentions/",
-        score: 42,
-        comments: 19,
+        score: null,
+        comments: null,
         summary: "People are asking for practical ways to track whether AI tools mention a brand or competitor."
       },
       {
         title: "Is Reddit still worth it for B2B SaaS marketing?",
         subreddit: "r/marketing",
         url: "https://www.reddit.com/r/marketing/comments/mock_b2b_reddit/",
-        score: 68,
-        comments: 31,
+        score: null,
+        comments: null,
         summary: "The discussion centers on authentic participation, useful answers, and avoiding obvious promotion."
       },
       {
         title: "How do companies get included in AI answers?",
         subreddit: "r/startups",
         url: "https://www.reddit.com/r/startups/comments/mock_ai_answers/",
-        score: 29,
-        comments: 14,
+        score: null,
+        comments: null,
         summary: "Founders are trying to understand which third-party sources influence AI-generated answers."
       }
     ];
@@ -199,8 +200,12 @@ export class MockProviderBundle implements ProviderBundle {
     return concepts;
   }
 
-  async synthesizeReport(input: ReportSynthesisInput) {
+  async synthesizeReport(input: ReportSynthesisInput): Promise<OpportunityReport> {
     await wait(20);
+    const simulatedEvidence = () =>
+      createNotMeasuredEvidence(
+        "This value comes from local mock data and is not public research evidence."
+      );
     const keywordOpportunities: OpportunityReport["keywordOpportunities"] = input.keywordMetrics.slice(0, 12).map((metric, index) => {
       const redditFit = index % 3 === 0 ? "High" : index % 3 === 1 ? "Medium" : "Low";
       return {
@@ -218,17 +223,25 @@ export class MockProviderBundle implements ProviderBundle {
         recommendedAction:
           index < 4
             ? "Create or improve a decision-stage page and seed a Reddit-safe discussion angle."
-            : "Monitor the query and add a concise answer to the site."
+            : "Monitor the query and add a concise answer to the site.",
+        evidence: {
+          monthlySearchVolume: simulatedEvidence(),
+          difficulty: simulatedEvidence(),
+          trafficPotential: simulatedEvidence(),
+          intent: simulatedEvidence(),
+          analysis: simulatedEvidence()
+        }
       };
     });
     const redditOpportunities: OpportunityReport["redditOpportunities"] = input.reddit.map((evidence, index) => ({
       title: evidence.title,
       subreddit: evidence.subreddit,
       url: evidence.url,
-      estimatedMonthlyViews: Math.max(650, (evidence.score ?? 10) * 95 + (evidence.comments ?? 5) * 140),
-      upvoteCount: evidence.score ?? 0,
-      commentCount: evidence.comments ?? 0,
-      engagementSummary: `${evidence.score ?? 0} upvotes and ${evidence.comments ?? 0} comments, used as a directional engagement proxy rather than official Reddit traffic.`,
+      estimatedMonthlyViews: null,
+      upvoteCount: null,
+      commentCount: null,
+      engagementSummary:
+        "Mock mode does not provide verified Reddit engagement or traffic metrics.",
       discussionSummary: evidence.summary,
       whyLowHangingFruit:
         "The thread already contains buyer-language questions. A useful answer or related educational post can create discovery without forcing a sales pitch.",
@@ -238,21 +251,22 @@ export class MockProviderBundle implements ProviderBundle {
           : "What should a useful Reddit and AI-search visibility plan include?",
       suggestedPostBody:
         "I am comparing practical ways teams show up where buyers research before a sales call. The useful patterns seem to be clear comparison pages, helpful Reddit participation, and third-party source mentions that AI tools can cite. What has worked without feeling spammy?",
-      riskLevel: index === 0 ? "Low" : "Medium"
+      riskLevel: index === 0 ? "Low" : "Medium",
+      evidence: {
+        discussion: simulatedEvidence(),
+        monthlyViews: simulatedEvidence(),
+        upvotes: simulatedEvidence(),
+        comments: simulatedEvidence(),
+        analysis: simulatedEvidence()
+      }
     }));
-    const competitorGaps: OpportunityReport["competitorGaps"] = input.ahrefs.organicCompetitors.slice(0, 5).map((competitor) => ({
-      competitor: competitor.name,
-      source: competitor.domain,
-      url: `https://${competitor.domain}`,
-      gap: `${competitor.name} appears to have more established search visibility and likely more third-party source coverage.`,
-      recommendedAction: "Build a comparison or alternatives page and support it with useful Reddit/source participation."
-    }));
+    const competitorGaps: OpportunityReport["competitorGaps"] = [];
     const opportunityScore = calculateOpportunityScore({
       keywordOpportunities,
       redditOpportunities,
       competitorGaps
     });
-    const isSimulation = !input.enableRealAiChecks;
+    const isSimulation = true as const;
     const keywordTraffic = keywordOpportunities.reduce(
       (sum, keyword) => sum + (keyword.trafficPotential ?? keyword.monthlySearchVolume ?? 0),
       0
@@ -264,8 +278,10 @@ export class MockProviderBundle implements ProviderBundle {
       submittedUrl: input.submittedUrl,
       domain: input.domain,
       opportunityScore,
+      opportunityScoreEvidence: simulatedEvidence(),
       headline: `${input.analysis.business.companyName} has a clear opening to be easier to find on Reddit and in AI search answers.`,
       business: input.analysis.business,
+      businessEvidence: simulatedEvidence(),
       visibilitySnapshot: createVisibilitySnapshot({
         opportunityScore,
         redditOpportunities,
@@ -279,25 +295,29 @@ export class MockProviderBundle implements ProviderBundle {
           prompt: `What are the best ${input.analysis.business.category} companies?`,
           sampleAnswer: `${input.analysis.business.companyName} could be mentioned alongside established alternatives if useful comparison and proof sources are published.`,
           citationAngle: "Create a credible category comparison page and earn discussion in relevant Reddit threads.",
-          isSimulation
+          isSimulation,
+          evidence: simulatedEvidence()
         },
         {
           prompt: `Which ${input.analysis.business.category} option is best for startups?`,
           sampleAnswer: `A strong answer would cite clear pricing, use cases, and third-party discussion that explains where ${input.analysis.business.companyName} fits.`,
           citationAngle: "Publish startup-specific positioning and proof.",
-          isSimulation
+          isSimulation,
+          evidence: simulatedEvidence()
         },
         {
           prompt: `What do Reddit users recommend for ${input.analysis.primaryKeyword}?`,
           sampleAnswer: `${input.analysis.business.companyName} can become discoverable when authentic discussions answer real questions and link back to useful resources.`,
           citationAngle: "Use Reddit-safe educational posts and helpful comments.",
-          isSimulation
+          isSimulation,
+          evidence: simulatedEvidence()
         },
         {
           prompt: `What are alternatives to ${input.analysis.competitors[0] ?? "popular competitors"}?`,
           sampleAnswer: `AI search systems need source material that explains credible alternatives. ${input.analysis.business.companyName} needs clearer comparison content to qualify.`,
           citationAngle: "Create alternatives content that is factual, narrow, and easy to cite.",
-          isSimulation
+          isSimulation,
+          evidence: simulatedEvidence()
         }
       ],
       memeConcepts: createMemeConcepts({
@@ -314,14 +334,21 @@ export class MockProviderBundle implements ProviderBundle {
         "Run a Buyer Visibility Sprint to expand from this sample to a full 40-75 query map."
       ],
       evidenceSummary: {
+        researchMode: "mock",
         crawlSummary: `Analyzed main page text from ${input.normalizedUrl}.`,
         keywordSource: "Keyword and search visibility metrics are from mock provider data in local mode.",
         redditSource: "Reddit opportunities are represented by mock evidence in local mode.",
-        aiSearchSource: isSimulation
-          ? "AI-search examples are simulated opportunity examples, not verified live citations."
-          : "AI-search examples include provider checks where enabled.",
-        generatedWithRealAiChecks: input.enableRealAiChecks
-      }
+        aiSearchSource:
+          "AI-search examples are simulated opportunity examples. Live AI platform visibility was not measured.",
+        generatedWithRealAiChecks: false
+      },
+      claims: [
+        {
+          claimId: "mock-data-not-measured",
+          claimText: "Local mock data is present for development and is not measured public evidence.",
+          ...simulatedEvidence()
+        }
+      ]
     };
   }
 }

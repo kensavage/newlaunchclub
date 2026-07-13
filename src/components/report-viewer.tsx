@@ -5,7 +5,7 @@ import { ProgressTimeline } from "@/components/progress-timeline";
 import { ReportDocument } from "@/components/report-document";
 import type { ReportResponse } from "@/lib/report/schema";
 
-export function ReportViewer({ publicId }: { publicId: string }) {
+export function ReportViewer({ reportAccessKey }: { reportAccessKey: string }) {
   const [response, setResponse] = useState<ReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,7 +14,9 @@ export function ReportViewer({ publicId }: { publicId: string }) {
 
     async function poll() {
       try {
-        const fetchResponse = await fetch(`/api/reports/${publicId}`, { cache: "no-store" });
+        const fetchResponse = await fetch(`/api/reports/${encodeURIComponent(reportAccessKey)}`, {
+          cache: "no-store"
+        });
 
         if (!fetchResponse.ok) {
           throw new Error("Report not found.");
@@ -36,7 +38,7 @@ export function ReportViewer({ publicId }: { publicId: string }) {
       isActive = false;
       clearInterval(timer);
     };
-  }, [publicId]);
+  }, [reportAccessKey]);
 
   if (error) {
     return <p className="error-text">{error}</p>;
