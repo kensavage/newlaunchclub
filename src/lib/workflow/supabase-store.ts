@@ -42,7 +42,7 @@ export class SupabaseWorkflowStore implements WorkflowStore {
       p_correlation_id: input.correlationId,
       p_priority: input.priority ?? 0,
       p_workflow_version: input.workflowVersion ?? 1,
-      p_orchestrator_backend: input.orchestratorBackend ?? "netlify",
+      p_orchestrator_backend: input.orchestratorBackend ?? "supabase_queue",
       p_maximum_attempts: input.maximumAttempts ?? 4,
       p_now: now
     });

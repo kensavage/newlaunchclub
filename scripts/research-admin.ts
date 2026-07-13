@@ -6,12 +6,10 @@ loadEnvConfig(process.cwd());
 
 async function main() {
   const { WorkflowAdministratorService, createServerCliAdminActor } = await import("../src/lib/workflow/admin-service");
-  const { getWorkflowDispatcher, getWorkflowStore } = await import("../src/lib/workflow/store-factory");
-  const { dispatchWorkflowOutbox } = await import("../src/lib/workflow/outbox-dispatcher");
+  const { getWorkflowStore } = await import("../src/lib/workflow/store-factory");
   const [command = "help", ...args] = process.argv.slice(2);
   const store = getWorkflowStore();
   const service = new WorkflowAdministratorService(store, createServerCliAdminActor());
-  const dispatchPending = () => dispatchWorkflowOutbox(store, getWorkflowDispatcher(store), { limit: 10 });
 
   if (command === "list") {
     const status = option(args, "--status");
@@ -22,18 +20,15 @@ async function main() {
     print(await service.show(required(args[0], "workflow ID")));
   } else if (command === "retry") {
     await service.retry(required(args[0], "workflow ID"));
-    await dispatchPending();
     print({ ok: true });
   } else if (command === "retry-step") {
     await service.retryStep(required(args[0], "workflow ID"), required(args[1], "step key"));
-    await dispatchPending();
     print({ ok: true });
   } else if (command === "pause") {
     await service.pause(required(args[0], "workflow ID"));
     print({ ok: true });
   } else if (command === "resume") {
     await service.resume(required(args[0], "workflow ID"));
-    await dispatchPending();
     print({ ok: true });
   } else if (command === "cancel") {
     const workflowId = required(args[0], "workflow ID");

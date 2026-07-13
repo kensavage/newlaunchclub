@@ -19,7 +19,6 @@
     "research:admin": "NODE_OPTIONS=--conditions=react-server tsx scripts/research-admin.ts"
   },
   "dependencies": {
-    "@netlify/async-workloads": "^0.0.106",
     "@netlify/functions": "^4.3.0",
     "@remotion/player": "4.0.485",
     "@supabase/supabase-js": "^2.107.0",

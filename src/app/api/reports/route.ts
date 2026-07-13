@@ -4,8 +4,7 @@ import { createReportIntake } from "@/lib/report/intake-service";
 import { readJsonBodyWithLimit } from "@/lib/report/intake-validation";
 import { getPublicReportError } from "@/lib/report/public-report";
 import { getRequestIp } from "@/lib/report/rate-limit";
-import { dispatchWorkflowOutbox } from "@/lib/workflow/outbox-dispatcher";
-import { getWorkflowDispatcher, getWorkflowStore } from "@/lib/workflow/store-factory";
+import { wakeWorkflowConsumerBestEffort } from "@/lib/workflow/wakeup-client";
 
 export const runtime = "nodejs";
 
@@ -30,12 +29,8 @@ export async function POST(request: Request) {
       userAgent: request.headers.get("user-agent")
     });
 
-    if (acknowledgement.shouldDispatch) {
-      const workflowStore = getWorkflowStore();
-      await dispatchWorkflowOutbox(workflowStore, getWorkflowDispatcher(workflowStore), {
-        limit: 1,
-        leaseSeconds: env.WORKFLOW_OUTBOX_LEASE_SECONDS
-      });
+    if (acknowledgement.shouldDispatch && process.env.NETLIFY === "true") {
+      await wakeWorkflowConsumerBestEffort({ env });
     }
 
     return NextResponse.json(acknowledgement.response, {

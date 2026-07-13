@@ -2,10 +2,11 @@ import "server-only";
 import { getServerEnv, hasSupabaseEnv } from "@/lib/env";
 import { DeterministicWorkflowAdapter } from "@/lib/workflow/deterministic-adapter";
 import { MemoryWorkflowStore } from "@/lib/workflow/memory-store";
-import { NetlifyWorkflowAdapter } from "@/lib/workflow/netlify-adapter";
+import { getWorkflowQueue } from "@/lib/workflow/queue-factory";
 import { DurableWorkflowRunner } from "@/lib/workflow/runner";
 import type { WorkflowDispatcher, WorkflowStore } from "@/lib/workflow/store";
 import { WorkflowConfigurationError } from "@/lib/workflow/store";
+import { SupabaseQueueOrchestrator } from "@/lib/workflow/supabase-queue-orchestrator";
 import { SupabaseWorkflowStore } from "@/lib/workflow/supabase-store";
 
 let workflowStore: WorkflowStore | null = null;
@@ -38,9 +39,9 @@ export function getWorkflowStore(): WorkflowStore {
 export function getWorkflowDispatcher(store = getWorkflowStore()): WorkflowDispatcher {
   if (workflowDispatcher) return workflowDispatcher;
   const env = getServerEnv();
-  workflowDispatcher = process.env.NETLIFY === "true"
-    ? new NetlifyWorkflowAdapter(store, { baseUrl: env.NEXT_PUBLIC_SITE_URL, apiKey: env.AWL_API_KEY })
-    : new DeterministicWorkflowAdapter(store, new DurableWorkflowRunner(store, { leaseSeconds: env.WORKFLOW_LEASE_SECONDS }));
+  workflowDispatcher = env.REPORT_USE_MEMORY_STORE
+    ? new DeterministicWorkflowAdapter(store, new DurableWorkflowRunner(store, { leaseSeconds: env.WORKFLOW_LEASE_SECONDS }))
+    : new SupabaseQueueOrchestrator(store, getWorkflowQueue());
   return workflowDispatcher;
 }
 

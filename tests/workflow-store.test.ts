@@ -1,12 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { WorkflowAdministratorService } from "@/lib/workflow/admin-service";
-import { DeterministicWorkflowAdapter } from "@/lib/workflow/deterministic-adapter";
 import { MemoryWorkflowStore, resetMemoryWorkflowStoreForTests } from "@/lib/workflow/memory-store";
-import { assertWorkflowEventPayloadSize } from "@/lib/workflow/netlify-adapter";
-import { dispatchWorkflowOutbox } from "@/lib/workflow/outbox-dispatcher";
+import { assertWorkflowQueuePayloadSize } from "@/lib/workflow/queue";
 import { classifyWorkflowFailure, DurableWorkflowRunner, getRetryDelay } from "@/lib/workflow/runner";
-import type { WorkflowEventPayload } from "@/lib/workflow/schema";
-import { WorkflowBudgetError, WorkflowConfigurationError, WorkflowStateError, type WorkflowDispatcher } from "@/lib/workflow/store";
+import type { WorkflowQueuePayload } from "@/lib/workflow/schema";
+import { WorkflowBudgetError, WorkflowConfigurationError, WorkflowStateError } from "@/lib/workflow/store";
 
 const reportRequestId = "11111111-1111-4111-8111-111111111111";
 const reportId = "22222222-2222-4222-8222-222222222222";
@@ -30,19 +28,7 @@ describe("durable workflow store", () => {
     expect(snapshot.budgets[0]).toMatchObject({ limitCents: 400, reservedCents: 0, spentCents: 0 });
   });
 
-  it("leases, retries, and reclaims outbox events after a crash before acknowledgement", async () => {
-    const store = new MemoryWorkflowStore();
-    await createWorkflow(store);
-    const first = await store.claimOutbox({ owner: "one", limit: 1, leaseSeconds: 60, now: "2026-01-01T00:00:00.000Z" });
-    expect(first).toHaveLength(1);
-    expect(await store.claimOutbox({ owner: "two", limit: 1, leaseSeconds: 60, now: "2026-01-01T00:00:30.000Z" })).toHaveLength(0);
-    const reclaimed = await store.claimOutbox({ owner: "two", limit: 1, leaseSeconds: 60, now: "2026-01-01T00:01:01.000Z" });
-    expect(reclaimed).toHaveLength(1);
-    expect(await store.markOutboxSent({ outboxId: first[0]!.id, owner: "one", externalEventId: "late" })).toBe(false);
-    expect(await store.markOutboxFailed({ outboxId: first[0]!.id, owner: "two", safeError: "safe", retryAt: "2026-01-01T00:02:00.000Z" })).toBe(true);
-  });
-
-  it("dispatches identifier-only events and safely handles duplicate delivery", async () => {
+  it("processes identifier-only queue messages and safely handles duplicate delivery", async () => {
     const store = new MemoryWorkflowStore();
     const workflow = await createWorkflow(store);
     const payload = store.snapshot().outbox[0]!.payload;
@@ -53,8 +39,8 @@ describe("durable workflow store", () => {
 
     expect((await store.getWorkflow(workflow.id))?.status).toBe("ready_for_provider_research");
     expect(store.snapshot().steps.every((step) => step.attemptCount === 1)).toBe(true);
-    expect(assertWorkflowEventPayloadSize(payload)).toBeLessThan(1_000);
-    expect(Object.keys(payload).sort()).toEqual(["correlationId", "reportId", "reportRequestId", "workflowId", "workflowVersion"].sort());
+    expect(assertWorkflowQueuePayloadSize(payload)).toBeLessThan(1_000);
+    expect(Object.keys(payload).sort()).toEqual(["correlationId", "reportId", "reportRequestId", "requestedAt", "workflowId", "workflowVersion"].sort());
   });
 
   it("acquires one lease, renews heartbeat, recovers expiry, and fences the old owner", async () => {
@@ -133,7 +119,7 @@ describe("durable workflow store", () => {
     expect(store.snapshot().costs.some((entry) => entry.entryType === "release" && entry.amountCents === 52)).toBe(true);
   });
 
-  it("sanitizes public progress and rejects oversized Netlify event data", async () => {
+  it("sanitizes public progress and rejects oversized queue data", async () => {
     const store = new MemoryWorkflowStore();
     const workflow = await createWorkflow(store);
     const progress = await store.getPublicProgress(workflow.reportRequestId);
@@ -146,27 +132,8 @@ describe("durable workflow store", () => {
       ]
     });
     expect(JSON.stringify(progress)).not.toMatch(/94|ready_for_provider_research|Research workflow ready/);
-    const oversized = { ...store.snapshot().outbox[0]!.payload, extra: "x".repeat(40_000) } as unknown as WorkflowEventPayload;
-    expect(() => assertWorkflowEventPayloadSize(oversized)).toThrow(/payload/i);
-  });
-
-  it("marks dispatch sent only after adapter acknowledgement", async () => {
-    const store = new MemoryWorkflowStore();
-    await createWorkflow(store);
-    const adapter = new DeterministicWorkflowAdapter(store);
-    const result = await dispatchWorkflowOutbox(store, adapter, { owner: "dispatcher", now: () => new Date("2026-01-01T00:00:00.000Z") });
-    expect(result).toEqual({ claimed: 1, sent: 1, deferred: 0 });
-    expect(store.snapshot().outbox[0]?.status).toBe("sent");
-  });
-
-  it("defers a failed adapter send without losing the outbox event", async () => {
-    const store = new MemoryWorkflowStore();
-    await createWorkflow(store);
-    const dispatcher = { dispatchWorkflow: vi.fn().mockRejectedValue(new Error("network")) } as unknown as WorkflowDispatcher;
-    const result = await dispatchWorkflowOutbox(store, dispatcher, { owner: "dispatcher", now: () => new Date("2026-01-01T00:00:00.000Z") });
-    expect(result.deferred).toBe(1);
-    expect(store.snapshot().outbox[0]?.status).toBe("retry_scheduled");
-    expect(store.snapshot().outbox[0]?.lastSafeError).not.toContain("network");
+    const oversized = { ...store.snapshot().outbox[0]!.payload, extra: "x".repeat(40_000) } as unknown as WorkflowQueuePayload;
+    expect(() => assertWorkflowQueuePayloadSize(oversized)).toThrow(/payload/i);
   });
 });
 

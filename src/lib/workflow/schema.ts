@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const WORKFLOW_EVENT_NAME = "launchclub.report.requested.v1" as const;
+export const WORKFLOW_MESSAGE_TYPE = "launchclub.report.requested.v1" as const;
+export const WORKFLOW_QUEUE_NAME = "v3_report_workflows" as const;
 export const INITIAL_REPORT_BUDGET_CENTS = 400;
 export const WEEKLY_REFRESH_BUDGET_CENTS = 100;
 
@@ -45,20 +46,21 @@ export const failureClassificationSchema = z.enum([
   "configuration_error"
 ]);
 
-export const workflowEventPayloadSchema = z
+export const workflowQueuePayloadSchema = z
   .object({
     workflowId: z.string().uuid(),
     reportRequestId: z.string().uuid(),
     reportId: z.string().uuid(),
     correlationId: z.string().uuid(),
-    workflowVersion: z.number().int().positive()
+    workflowVersion: z.number().int().positive(),
+    requestedAt: z.string().datetime({ offset: true })
   })
   .strict();
 
 export type WorkflowStatus = z.infer<typeof workflowStatusSchema>;
 export type StepStatus = z.infer<typeof stepStatusSchema>;
 export type FailureClassification = z.infer<typeof failureClassificationSchema>;
-export type WorkflowEventPayload = z.infer<typeof workflowEventPayloadSchema>;
+export type WorkflowQueuePayload = z.infer<typeof workflowQueuePayloadSchema>;
 export type WorkflowStepKey = (typeof INITIAL_WORKFLOW_STEPS)[number];
 
 export interface WorkflowRecord {
@@ -71,7 +73,7 @@ export interface WorkflowRecord {
   currentPhase: WorkflowStepKey | "provider_research";
   priority: number;
   inputHash: string;
-  orchestratorBackend: "netlify" | "deterministic";
+  orchestratorBackend: "supabase_queue" | "deterministic";
   externalEventId: string | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -143,10 +145,10 @@ export interface WorkflowLeaseRecord {
 
 export interface OutboxEventRecord {
   id: string;
-  eventType: typeof WORKFLOW_EVENT_NAME;
+  eventType: typeof WORKFLOW_MESSAGE_TYPE;
   aggregateType: "research_workflow";
   aggregateId: string;
-  payload: WorkflowEventPayload;
+  payload: WorkflowQueuePayload;
   idempotencyKey: string;
   status: "pending" | "leased" | "sent" | "retry_scheduled";
   attemptCount: number;

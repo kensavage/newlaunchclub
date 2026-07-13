@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { INITIAL_WORKFLOW_STEPS, type FailureClassification, type WorkflowEventPayload, type WorkflowStepKey } from "@/lib/workflow/schema";
+import { INITIAL_WORKFLOW_STEPS, type FailureClassification, type WorkflowQueuePayload, type WorkflowStepKey } from "@/lib/workflow/schema";
 import { WorkflowBudgetError, WorkflowConfigurationError, type WorkflowStore } from "@/lib/workflow/store";
 
 export interface WorkflowRunnerOptions {
@@ -25,7 +25,7 @@ export class DurableWorkflowRunner {
     this.now = options.now ?? (() => new Date());
   }
 
-  async run(payload: WorkflowEventPayload, owner = `runner:${crypto.randomUUID()}`) {
+  async run(payload: WorkflowQueuePayload, owner = `runner:${crypto.randomUUID()}`) {
     const workflow = await this.store.getWorkflow(payload.workflowId);
     if (!workflow || workflow.reportRequestId !== payload.reportRequestId || workflow.reportId !== payload.reportId || workflow.workflowVersion !== payload.workflowVersion) {
       throw new WorkflowConfigurationError("The workflow event does not match canonical state.");

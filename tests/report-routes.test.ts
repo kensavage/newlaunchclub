@@ -10,9 +10,8 @@ import {
 import { MemoryReportStore } from "@/lib/report/memory-store";
 import { resetRateLimitsForTests } from "@/lib/report/rate-limit";
 import { setReportStoreForTests } from "@/lib/report/store-factory";
-import { DeterministicWorkflowAdapter } from "@/lib/workflow/deterministic-adapter";
 import { MemoryWorkflowStore, resetMemoryWorkflowStoreForTests } from "@/lib/workflow/memory-store";
-import { setWorkflowDispatcherForTests, setWorkflowStoreForTests } from "@/lib/workflow/store-factory";
+import { setWorkflowStoreForTests } from "@/lib/workflow/store-factory";
 
 describe("report intake and secure access routes", () => {
   let reportStore: MemoryReportStore;
@@ -37,14 +36,12 @@ describe("report intake and secure access routes", () => {
     setReportStoreForTests(reportStore);
     setReportIntakeStoreForTests(intakeStore);
     setWorkflowStoreForTests(workflowStore);
-    setWorkflowDispatcherForTests(new DeterministicWorkflowAdapter(workflowStore));
   });
 
   afterEach(() => {
     setReportIntakeStoreForTests(null);
     setReportStoreForTests(null);
     setWorkflowStoreForTests(null);
-    setWorkflowDispatcherForTests(null);
     vi.unstubAllEnvs();
   });
 
@@ -75,7 +72,7 @@ describe("report intake and secure access routes", () => {
     expect(acknowledgement.requestStatus).toBe("queued");
     expect(acknowledgement.reportAccessToken).toMatch(/^lc_report_/);
     expect(snapshot.reports[0]?.legacyPublicId).toBeNull();
-    expect(workflowStore.snapshot().workflows[0]?.status).toBe("ready_for_provider_research");
+    expect(workflowStore.snapshot().workflows[0]?.status).toBe("dispatch_pending");
 
     const secureResponse = await getReport(acknowledgement.reportAccessToken);
     const secureBody = await secureResponse.json();

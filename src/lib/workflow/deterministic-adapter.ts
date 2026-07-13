@@ -1,4 +1,4 @@
-import type { WorkflowEventPayload, WorkflowStepKey } from "@/lib/workflow/schema";
+import type { WorkflowQueuePayload, WorkflowStepKey } from "@/lib/workflow/schema";
 import type { AdminActor, WorkflowDispatcher, WorkflowStore } from "@/lib/workflow/store";
 import { DurableWorkflowRunner } from "@/lib/workflow/runner";
 
@@ -14,7 +14,7 @@ export class DeterministicWorkflowAdapter implements WorkflowDispatcher {
     this.runner = runner ?? new DurableWorkflowRunner(store);
   }
 
-  async dispatchWorkflow(payload: WorkflowEventPayload) {
+  async dispatchWorkflow(payload: WorkflowQueuePayload) {
     await this.runner.run(payload, `deterministic:${payload.correlationId}`);
     return { eventId: `deterministic:${payload.correlationId}` };
   }

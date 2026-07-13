@@ -4,7 +4,7 @@ import {
   INITIAL_REPORT_BUDGET_CENTS,
   INITIAL_WORKFLOW_STEPS,
   WEEKLY_REFRESH_BUDGET_CENTS,
-  WORKFLOW_EVENT_NAME,
+  WORKFLOW_MESSAGE_TYPE,
   type CostBudgetRecord,
   type CostEntryRecord,
   type OutboxEventRecord,
@@ -174,15 +174,16 @@ export class MemoryWorkflowStore implements WorkflowStore {
         reportRequestId: workflow.reportRequestId,
         reportId: workflow.reportId,
         correlationId: input.correlationId,
-        workflowVersion: workflow.workflowVersion
+        workflowVersion: workflow.workflowVersion,
+        requestedAt: now
       };
       const outbox: OutboxEventRecord = {
         id: crypto.randomUUID(),
-        eventType: WORKFLOW_EVENT_NAME,
+        eventType: WORKFLOW_MESSAGE_TYPE,
         aggregateType: "research_workflow",
         aggregateId: workflow.id,
         payload,
-        idempotencyKey: `${WORKFLOW_EVENT_NAME}:${workflow.id}:${workflow.workflowVersion}`,
+        idempotencyKey: `${WORKFLOW_MESSAGE_TYPE}:${workflow.id}:${workflow.workflowVersion}`,
         status: "pending",
         attemptCount: 0,
         availableAt: now,
@@ -787,10 +788,10 @@ export class MemoryWorkflowStore implements WorkflowStore {
 
   private ensureRetryOutbox(workflow: WorkflowRecord, now: string) {
     const retryNumber = this.state.events.filter((event) => event.workflowId === workflow.id && (event.eventType === "administrator_retry_requested" || event.eventType === "workflow_resumed")).length;
-    const idempotencyKey = `${WORKFLOW_EVENT_NAME}:${workflow.id}:${workflow.workflowVersion}:admin-retry:${retryNumber}`;
+    const idempotencyKey = `${WORKFLOW_MESSAGE_TYPE}:${workflow.id}:${workflow.workflowVersion}:admin-retry:${retryNumber}`;
     if ([...this.state.outbox.values()].some((event) => event.idempotencyKey === idempotencyKey)) return;
     const correlationId = crypto.randomUUID();
-    const outbox: OutboxEventRecord = { id: crypto.randomUUID(), eventType: WORKFLOW_EVENT_NAME, aggregateType: "research_workflow", aggregateId: workflow.id, payload: { workflowId: workflow.id, reportRequestId: workflow.reportRequestId, reportId: workflow.reportId, correlationId, workflowVersion: workflow.workflowVersion }, idempotencyKey, status: "pending", attemptCount: 0, availableAt: now, leasedAt: null, leaseOwner: null, sentAt: null, lastSafeError: null, createdAt: now, updatedAt: now };
+    const outbox: OutboxEventRecord = { id: crypto.randomUUID(), eventType: WORKFLOW_MESSAGE_TYPE, aggregateType: "research_workflow", aggregateId: workflow.id, payload: { workflowId: workflow.id, reportRequestId: workflow.reportRequestId, reportId: workflow.reportId, correlationId, workflowVersion: workflow.workflowVersion, requestedAt: now }, idempotencyKey, status: "pending", attemptCount: 0, availableAt: now, leasedAt: null, leaseOwner: null, sentAt: null, lastSafeError: null, createdAt: now, updatedAt: now };
     this.state.outbox.set(outbox.id, outbox);
   }
 

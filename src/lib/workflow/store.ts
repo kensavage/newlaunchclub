@@ -5,7 +5,7 @@ import type {
   OutboxEventRecord,
   SafeWorkflowProgress,
   WorkflowDetail,
-  WorkflowEventPayload,
+  WorkflowQueuePayload,
   WorkflowLeaseRecord,
   WorkflowRecord,
   WorkflowStatus,
@@ -20,7 +20,7 @@ export interface CreateWorkflowInput {
   correlationId: string;
   priority?: number;
   workflowVersion?: number;
-  orchestratorBackend?: "netlify" | "deterministic";
+  orchestratorBackend?: "supabase_queue" | "deterministic";
   maximumAttempts?: number;
 }
 
@@ -196,7 +196,7 @@ export interface WorkflowStore {
 }
 
 export interface WorkflowDispatcher {
-  dispatchWorkflow(payload: WorkflowEventPayload): Promise<{ eventId: string }>;
+  dispatchWorkflow(payload: WorkflowQueuePayload): Promise<{ eventId: string }>;
   resumeWorkflow(workflowId: string): Promise<void>;
   pauseWorkflow(workflowId: string): Promise<void>;
   cancelWorkflow(workflowId: string): Promise<void>;
