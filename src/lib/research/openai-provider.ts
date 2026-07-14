@@ -133,7 +133,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
     const raw = parseResponseJson(input.response);
     let output: ReturnType<typeof companyProfileDraftSchema.parse>;
     try {
-      output = companyProfileDraftSchema.parse(raw);
+      output = companyProfileDraftSchema.parse(canonicalizeCompanyProfileFields(raw));
     } catch (error) {
       throw processingError(
         "structured_output_schema_invalid",
@@ -385,6 +385,46 @@ function assertResponseCanBeParsed(response: AnalysisResponseArtifactDraft) {
       "response_validation"
     );
   }
+}
+
+const claimToTopLevelField = {
+  company_name: "companyName",
+  brand_name: "brandName",
+  website: "website",
+  industry: "industry",
+  subindustry: "subindustry",
+  business_model: "businessModel",
+  profile_summary: "summary"
+} as const;
+
+function canonicalizeCompanyProfileFields(raw: unknown) {
+  if (!isRecord(raw) || !Array.isArray(raw.claims)) return raw;
+
+  const canonical = { ...raw };
+  for (const [claimField, topLevelField] of Object.entries(claimToTopLevelField)) {
+    const matchingClaims = raw.claims.filter(
+      (claim) => isRecord(claim) && claim.fieldKey === claimField
+    );
+    if (matchingClaims.length !== 1) continue;
+
+    const claim = matchingClaims[0]!;
+    if (
+      (claim.status === "measured" || claim.status === "inferred") &&
+      typeof claim.value === "string"
+    ) {
+      canonical[topLevelField as keyof typeof canonical] = claim.value;
+    } else if (
+      (claim.status === "unavailable" || claim.status === "unmeasured") &&
+      claim.value === null
+    ) {
+      canonical[topLevelField as keyof typeof canonical] = null;
+    }
+  }
+  return canonical;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function assertEvidencePointers(

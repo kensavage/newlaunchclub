@@ -282,6 +282,45 @@ describe("PR4 provider adapters with mocked HTTP", () => {
     }));
   });
 
+  it("replays captured profiles by canonicalizing duplicate top-level fields from claims", async () => {
+    const profile = syntheticCompanyProfile();
+    profile.businessModel = "Conflicting top-level business model";
+    profile.subindustry = "Conflicting top-level subindustry";
+    profile.summary = "Conflicting top-level summary";
+    const fetchMock = vi.fn(async () => openAiResponse(
+      profile,
+      "resp_profile_claim_canonicalization",
+      120,
+      48
+    ));
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-openai-key",
+      "gpt-5.4-nano",
+      { fetchImplementation: fetchMock }
+    );
+
+    const response = await provider.createCompanyProfileResponse({
+      normalizedUrl: "https://example.com/",
+      domain: "example.com",
+      pages: selectCompanyProfileContext(syntheticEvidencePages()).pages
+    });
+    const result = provider.parseCompanyProfileResponse({
+      response,
+      evidencePages: syntheticEvidencePages()
+    });
+
+    expect(result.output.businessModel).toBe(
+      profile.claims.find((claim) => claim.fieldKey === "business_model")?.value
+    );
+    expect(result.output.subindustry).toBe(
+      profile.claims.find((claim) => claim.fieldKey === "subindustry")?.value
+    );
+    expect(result.output.summary).toBe(
+      profile.claims.find((claim) => claim.fieldKey === "profile_summary")?.value
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("checks OpenAI model readiness with the same credential and without inference", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({
       id: "gpt-5.4-nano",
