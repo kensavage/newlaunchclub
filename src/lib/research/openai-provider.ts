@@ -1,11 +1,13 @@
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
+import { z } from "zod";
 import {
   COMPANY_PROFILE_PROMPT_VERSION,
   ProviderResearchError,
   SEARCH_QUERY_PROMPT_VERSION,
   assertQueriesSupportedByProfile,
   companyProfileDraftSchema,
+  companyProfileEntitySchema,
   normalizeDiscoveredQueries,
   searchQuerySetDraftSchema,
   type CompanyProfileReadModel,
@@ -14,6 +16,17 @@ import {
 } from "@/lib/research/contracts";
 
 const MAX_EVIDENCE_CHARACTERS = 90_000;
+const MAX_OUTPUT_URL_CHARACTERS = 2_048;
+
+// OpenAI Structured Outputs does not support JSON Schema's "uri" format.
+// Keep the wire schema compatible, then apply the stricter domain schema below.
+const openAiCompanyProfileEntitySchema = companyProfileEntitySchema.safeExtend({
+  url: z.string().trim().min(1).max(MAX_OUTPUT_URL_CHARACTERS).nullable()
+});
+const openAiCompanyProfileDraftSchema = companyProfileDraftSchema.safeExtend({
+  website: z.string().trim().min(1).max(MAX_OUTPUT_URL_CHARACTERS),
+  entities: z.array(openAiCompanyProfileEntitySchema).max(50)
+});
 
 export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvider {
   readonly provider = "openai" as const;
@@ -83,7 +96,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
           }
         ],
         text: {
-          format: zodTextFormat(companyProfileDraftSchema, "company_profile")
+          format: zodTextFormat(openAiCompanyProfileDraftSchema, "company_profile")
         }
       });
       providerAccepted = true;

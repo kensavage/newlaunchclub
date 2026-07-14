@@ -234,7 +234,37 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       store: false,
       text: { format: { type: "json_schema" } }
     });
+    expect(JSON.stringify(openAiBody.text.format.schema)).not.toContain('"format":"uri"');
     expect(JSON.stringify(openAiBody)).not.toMatch(/chain.of.thought|hidden reasoning/i);
+  });
+
+  it("keeps strict URL validation after using an OpenAI-compatible response schema", async () => {
+    const profile = syntheticCompanyProfile();
+    profile.website = "not-a-url";
+    const websiteClaim = profile.claims.find((claim) => claim.fieldKey === "website")!;
+    websiteClaim.value = "not-a-url";
+    websiteClaim.normalizedValue = "not-a-url";
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-openai-key",
+      "gpt-5.4-nano",
+      {
+        fetchImplementation: vi.fn(async () => openAiResponse(
+          profile,
+          "resp_invalid_url",
+          10,
+          10
+        ))
+      }
+    );
+
+    await expect(provider.extractCompanyProfile({
+      normalizedUrl: "https://example.com/",
+      domain: "example.com",
+      pages: syntheticEvidencePages()
+    })).rejects.toMatchObject({
+      safeCode: "structured_analysis_failed",
+      outcome: "outcome_uncertain"
+    });
   });
 
   it("checks OpenAI model readiness with the same credential and without inference", async () => {
