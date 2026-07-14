@@ -187,6 +187,117 @@ export class SupabaseProviderResearchStore implements ProviderResearchStore {
     );
   }
 
+  persistContentSelection(input: Parameters<ProviderResearchStore["persistContentSelection"]>[0]) {
+    return this.rpc<{ selectionRunId: string }>("persist_v3_content_selection", {
+      p_operation_id: input.operationId,
+      p_selection_version: input.selection.version,
+      p_input_hash: input.selection.inputHash,
+      p_limits: input.selection.limits,
+      p_total_original_characters: input.selection.totalOriginalCharacters,
+      p_total_selected_characters: input.selection.totalSelectedCharacters,
+      p_legal_selected_characters: input.selection.legalSelectedCharacters,
+      p_pages: input.selection.pages.map((page) => ({
+        snapshotId: page.snapshotId,
+        pageIndex: page.pageIndex,
+        classification: page.classification,
+        rank: page.rank,
+        included: page.included,
+        inclusionReason: page.inclusionReason,
+        exclusionReason: page.exclusionReason,
+        originalCharacters: page.originalCharacters,
+        selectedCharacters: page.selectedCharacters,
+        selectedOrder: page.selectedOrder,
+        selectedContentHash: page.selectedContentHash,
+        selectedMarkdown: page.selectedMarkdown
+      })),
+      p_now: input.now ?? new Date().toISOString()
+    });
+  }
+
+  getContentSelection(operationId: string) {
+    return this.rpcNullable<Awaited<ReturnType<ProviderResearchStore["getContentSelection"]>>>(
+      "get_v3_content_selection",
+      { p_operation_id: operationId }
+    );
+  }
+
+  getAnalysisResponse(operationId: string) {
+    return this.rpcNullable<Awaited<ReturnType<ProviderResearchStore["getAnalysisResponse"]>>>(
+      "get_v3_analysis_response",
+      { p_operation_id: operationId }
+    );
+  }
+
+  captureAnalysisResponse(
+    input: Parameters<ProviderResearchStore["captureAnalysisResponse"]>[0],
+    _workflowStore: unknown
+  ) {
+    void _workflowStore;
+    return this.rpc<Awaited<ReturnType<ProviderResearchStore["captureAnalysisResponse"]>>>(
+      "capture_v3_analysis_response",
+      {
+        p_operation_id: input.operationId,
+        p_attempt_id: input.attemptId,
+        p_provider_response_id: input.response.providerResponseId,
+        p_provider_request_id: input.response.providerRequestId,
+        p_response_status: input.response.responseStatus,
+        p_model_identifier: input.response.model,
+        p_prompt_template_version: input.response.promptTemplateVersion,
+        p_schema_version: input.response.schemaVersion,
+        p_provider_created_at: input.response.providerCreatedAt,
+        p_response_received_at: input.response.responseReceivedAt,
+        p_provider_usage: input.response.usage,
+        p_actual_cost_cents: input.actualCostCents,
+        p_output_text: input.response.outputText,
+        p_refusal: input.response.refusal,
+        p_incomplete_reason: input.response.incompleteReason,
+        p_provider_error_code: input.response.providerErrorCode,
+        p_artifact_complete: input.response.artifactComplete,
+        p_sanitized_metadata: input.response.sanitizedMetadata,
+        p_now: input.now ?? new Date().toISOString()
+      }
+    );
+  }
+
+  recordAnalysisResponseRetrieval(
+    input: Parameters<ProviderResearchStore["recordAnalysisResponseRetrieval"]>[0]
+  ) {
+    return this.rpc<Awaited<ReturnType<ProviderResearchStore["recordAnalysisResponseRetrieval"]>>>(
+      "record_v3_analysis_response_retrieval",
+      {
+        p_artifact_id: input.artifactId,
+        p_provider_response_id: input.response.providerResponseId,
+        p_provider_request_id: input.response.providerRequestId,
+        p_response_status: input.response.responseStatus,
+        p_provider_usage: input.response.usage,
+        p_output_text: input.response.outputText,
+        p_refusal: input.response.refusal,
+        p_incomplete_reason: input.response.incompleteReason,
+        p_provider_error_code: input.response.providerErrorCode,
+        p_artifact_complete: input.response.artifactComplete,
+        p_sanitized_metadata: input.response.sanitizedMetadata,
+        p_now: input.now ?? new Date().toISOString()
+      }
+    );
+  }
+
+  recordAnalysisProcessingResult(
+    input: Parameters<ProviderResearchStore["recordAnalysisProcessingResult"]>[0]
+  ) {
+    return this.rpc<Awaited<ReturnType<ProviderResearchStore["recordAnalysisProcessingResult"]>>>(
+      "record_v3_analysis_processing_result",
+      {
+        p_artifact_id: input.artifactId,
+        p_phase: input.phase,
+        p_status: input.status,
+        p_classification: input.classification ?? null,
+        p_safe_code: input.safeCode ?? null,
+        p_safe_summary: input.safeSummary ?? null,
+        p_now: input.now ?? new Date().toISOString()
+      }
+    );
+  }
+
   persistCompanyProfile(input: Parameters<ProviderResearchStore["persistCompanyProfile"]>[0]) {
     return this.rpc<Awaited<ReturnType<ProviderResearchStore["persistCompanyProfile"]>>>(
       "persist_company_profile",

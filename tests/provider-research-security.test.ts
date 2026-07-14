@@ -12,7 +12,8 @@ const researchSources = [
 ].map((filePath) => readFileSync(filePath, "utf8")).join("\n");
 const migration = [
   "0005_v3_provider_research_evidence.sql",
-  "0006_v3_provider_failure_settlement.sql"
+  "0006_v3_provider_failure_settlement.sql",
+  "0007_v3_openai_response_recovery_context_selection.sql"
 ].map((name) => readFileSync(path.join(root, "supabase/migrations", name), "utf8")).join("\n");
 const envSchema = readFileSync(path.join(root, "src/lib/env-schema.ts"), "utf8");
 
@@ -52,7 +53,13 @@ describe("PR4 provider research security and scope boundaries", () => {
       "reserve_v3_provider_operation_cost",
       "settle_v3_provider_operation",
       "block_v3_provider_configuration",
-      "admin_reconcile_v3_provider_operation"
+      "admin_reconcile_v3_provider_operation",
+      "persist_v3_content_selection",
+      "get_v3_content_selection",
+      "get_v3_analysis_response",
+      "capture_v3_analysis_response",
+      "record_v3_analysis_response_retrieval",
+      "record_v3_analysis_processing_result"
     ]) {
       expect(migration).toContain(`function public.${functionName}(`);
       expect(migration).toMatch(new RegExp(
@@ -63,6 +70,18 @@ describe("PR4 provider research security and scope boundaries", () => {
       ));
     }
     expect(migration).toContain("alter table public.provider_operation_reconciliations enable row level security");
+    for (const tableName of [
+      "analysis_response_artifacts",
+      "analysis_response_diagnostics",
+      "analysis_response_retrieval_attempts",
+      "content_selection_runs",
+      "content_selection_pages"
+    ]) {
+      expect(migration).toContain(`alter table public.${tableName} enable row level security`);
+      expect(migration).toMatch(new RegExp(
+        `revoke all on table public\\.${tableName}[\\s\\S]+?from public, anon, authenticated, service_role;`
+      ));
+    }
     expect(migration).not.toMatch(/grant[^;]+(?:anon|authenticated)/i);
   });
 });

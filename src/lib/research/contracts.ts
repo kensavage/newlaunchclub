@@ -3,8 +3,9 @@ import type { FailureClassification } from "@/lib/workflow/schema";
 
 export const WEBSITE_RESEARCH_MAX_PAGES = 20;
 export const SEARCH_QUERY_HARD_MAX = 30;
-export const COMPANY_PROFILE_PROMPT_VERSION = "company-profile-v1";
-export const SEARCH_QUERY_PROMPT_VERSION = "search-query-discovery-v1";
+export const COMPANY_PROFILE_PROMPT_VERSION = "company-profile-v2";
+export const SEARCH_QUERY_PROMPT_VERSION = "search-query-discovery-v2";
+export const CONTENT_SELECTION_VERSION = "company-profile-context-v1";
 
 export const claimStatusSchema = z.enum([
   "measured",
@@ -246,18 +247,151 @@ export interface StructuredAnalysisResult<T> {
   output: T;
 }
 
+export type AnalysisOperationKind = Extract<
+  ProviderOperationKind,
+  "company_profile_extraction" | "search_query_discovery"
+>;
+
+export type AnalysisResponseStatus =
+  | "completed"
+  | "failed"
+  | "in_progress"
+  | "cancelled"
+  | "queued"
+  | "incomplete";
+
+export interface AnalysisResponseArtifactDraft {
+  provider: "openai" | "mock";
+  providerResponseId: string;
+  providerRequestId: string | null;
+  responseStatus: AnalysisResponseStatus;
+  model: string;
+  promptTemplateVersion: string;
+  schemaVersion: string;
+  providerCreatedAt: string | null;
+  responseReceivedAt: string;
+  usage: Required<Pick<ProviderUsage, "inputTokens" | "outputTokens" | "totalTokens">> & ProviderUsage;
+  outputText: string | null;
+  refusal: string | null;
+  incompleteReason: "max_output_tokens" | "content_filter" | null;
+  providerErrorCode: string | null;
+  artifactComplete: boolean;
+  sanitizedMetadata: {
+    outputItemTypes: string[];
+    messageStatuses: string[];
+    storedForRecovery: boolean;
+    outputTruncated: boolean;
+  };
+}
+
+export interface StoredAnalysisResponseArtifact extends AnalysisResponseArtifactDraft {
+  id: string;
+  operationId: string;
+  providerAttemptId: string;
+  actualCostCents: number;
+  parseStatus: "pending" | "succeeded" | "failed";
+  parseAttempts: number;
+  persistenceStatus: "pending" | "succeeded" | "failed";
+  persistenceAttempts: number;
+  processingPhase: AnalysisProcessingPhase;
+  firstFailureClassification: FailureClassification | null;
+  firstSafeCode: string | null;
+  firstSafeSummary: string | null;
+  currentFailureClassification: FailureClassification | null;
+  currentSafeCode: string | null;
+  currentSafeSummary: string | null;
+  reconciliationStatus: "not_required" | "retrieval_required" | "retrieval_failed" | "recovered";
+  retrievalAttempts: number;
+  parsedAt: string | null;
+  persistedAt: string | null;
+}
+
+export type AnalysisProcessingPhase =
+  | "response_capture"
+  | "response_validation"
+  | "retrieval"
+  | "parse"
+  | "evidence_validation"
+  | "persistence"
+  | "complete";
+
+export interface ContentSelectionLimits {
+  maximumTotalCharacters: number;
+  maximumPageCharacters: number;
+  maximumLegalCharacters: number;
+  maximumPages: number;
+  duplicateThreshold: number;
+}
+
+export type ContentPageClassification =
+  | "homepage"
+  | "about"
+  | "product_service"
+  | "solution_use_case"
+  | "pricing"
+  | "proof"
+  | "team"
+  | "contact_location"
+  | "documentation"
+  | "legal_admin"
+  | "general";
+
+export interface ContentSelectionPage {
+  snapshotId: string;
+  pageIndex: number;
+  sourceUrl: string;
+  canonicalUrl: string;
+  title: string | null;
+  description: string | null;
+  contentHash: string;
+  classification: ContentPageClassification;
+  rank: number;
+  included: boolean;
+  inclusionReason: string | null;
+  exclusionReason: string | null;
+  originalCharacters: number;
+  selectedCharacters: number;
+  selectedOrder: number | null;
+  selectedContentHash: string | null;
+  selectedMarkdown: string;
+}
+
+export interface ContentSelectionResult {
+  version: string;
+  inputHash: string;
+  limits: ContentSelectionLimits;
+  totalOriginalCharacters: number;
+  totalSelectedCharacters: number;
+  legalSelectedCharacters: number;
+  pages: ContentSelectionPage[];
+}
+
 export interface StructuredAnalysisProvider {
   readonly provider: "openai" | "mock";
   checkReadiness(): Promise<void>;
-  extractCompanyProfile(input: {
+  createCompanyProfileResponse(input: {
     normalizedUrl: string;
     domain: string;
-    pages: WebsiteEvidencePage[];
-  }): Promise<StructuredAnalysisResult<CompanyProfileDraft>>;
-  discoverSearchQueries(input: {
+    pages: ContentSelectionPage[];
+  }): Promise<AnalysisResponseArtifactDraft>;
+  parseCompanyProfileResponse(input: {
+    response: AnalysisResponseArtifactDraft;
+    evidencePages: WebsiteEvidencePage[];
+  }): StructuredAnalysisResult<CompanyProfileDraft>;
+  createSearchQueryResponse(input: {
     profile: CompanyProfileReadModel;
     queryCount: number;
-  }): Promise<StructuredAnalysisResult<{ queries: SearchQueryDraft[] }>>;
+  }): Promise<AnalysisResponseArtifactDraft>;
+  parseSearchQueryResponse(input: {
+    response: AnalysisResponseArtifactDraft;
+    profile: CompanyProfileReadModel;
+    queryCount: number;
+  }): StructuredAnalysisResult<{ queries: SearchQueryDraft[] }>;
+  retrieveResponse(input: {
+    providerResponseId: string;
+    promptTemplateVersion: string;
+    schemaVersion: string;
+  }): Promise<AnalysisResponseArtifactDraft>;
 }
 
 export interface CompanyProfileReadModel {
@@ -339,6 +473,10 @@ export interface ProviderOperationRecord {
   lastSafeErrorSummary: string | null;
   providerStartedAt: string | null;
   providerCompletedAt: string | null;
+  providerResponseStatus: AnalysisResponseStatus | null;
+  providerResponseReceivedAt: string | null;
+  processingStatus: "pending" | "processing" | "succeeded" | "failed";
+  processingPhase: AnalysisProcessingPhase | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -354,6 +492,8 @@ export class ProviderResearchError extends Error {
       outcomeUncertain?: boolean;
       outcome?: Exclude<ProviderOutcome, "succeeded">;
       workflowSettled?: boolean;
+      providerResponseCaptured?: boolean;
+      processingPhase?: AnalysisProcessingPhase;
       cause?: unknown;
     } = {}
   ) {
@@ -367,6 +507,8 @@ export class ProviderResearchError extends Error {
     );
     this.outcomeUncertain = this.outcome === "outcome_uncertain";
     this.workflowSettled = options.workflowSettled ?? false;
+    this.providerResponseCaptured = options.providerResponseCaptured ?? false;
+    this.processingPhase = options.processingPhase ?? null;
   }
 
   readonly retryAfterSeconds: number | null;
@@ -374,6 +516,8 @@ export class ProviderResearchError extends Error {
   readonly outcomeUncertain: boolean;
   readonly outcome: Exclude<ProviderOutcome, "succeeded">;
   readonly workflowSettled: boolean;
+  readonly providerResponseCaptured: boolean;
+  readonly processingPhase: AnalysisProcessingPhase | null;
 }
 
 function defaultFailureOutcome(

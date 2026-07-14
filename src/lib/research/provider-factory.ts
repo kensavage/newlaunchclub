@@ -1,6 +1,7 @@
 import type { ServerEnv } from "@/lib/env-schema";
 import {
   ProviderResearchError,
+  type ContentSelectionLimits,
   type ProviderUsage,
   type StructuredAnalysisProvider,
   type WebsiteResearchProvider
@@ -27,6 +28,7 @@ export interface ProviderResearchProviders {
   maximumPages: number;
   queryCount: number;
   evidenceTtlHours: number;
+  contentSelectionLimits?: ContentSelectionLimits;
   mockMode: boolean;
 }
 
@@ -51,8 +53,9 @@ export function createProviderResearchProviders(
         actualModelCost: () => 0
       },
       maximumPages: env.V3_PROVIDER_MAX_CRAWL_PAGES,
-      queryCount: env.V3_PROVIDER_QUERY_COUNT,
+      queryCount: Math.min(env.V3_PROVIDER_QUERY_COUNT, 15),
       evidenceTtlHours: env.V3_PROVIDER_EVIDENCE_TTL_HOURS,
+      contentSelectionLimits: contentSelectionLimits(env),
       mockMode: true
     };
   }
@@ -91,9 +94,20 @@ export function createProviderResearchProviders(
       )
     },
     maximumPages: env.V3_PROVIDER_MAX_CRAWL_PAGES,
-    queryCount: env.V3_PROVIDER_QUERY_COUNT,
+    queryCount: Math.min(env.V3_PROVIDER_QUERY_COUNT, 15),
     evidenceTtlHours: env.V3_PROVIDER_EVIDENCE_TTL_HOURS,
+    contentSelectionLimits: contentSelectionLimits(env),
     mockMode: false
+  };
+}
+
+function contentSelectionLimits(env: ServerEnv): ContentSelectionLimits {
+  return {
+    maximumTotalCharacters: env.V3_PROFILE_CONTEXT_MAX_CHARACTERS,
+    maximumPageCharacters: env.V3_PROFILE_CONTEXT_MAX_PAGE_CHARACTERS,
+    maximumLegalCharacters: env.V3_PROFILE_CONTEXT_MAX_LEGAL_CHARACTERS,
+    maximumPages: env.V3_PROFILE_CONTEXT_MAX_PAGES,
+    duplicateThreshold: env.V3_PROFILE_CONTEXT_DUPLICATE_THRESHOLD
   };
 }
 

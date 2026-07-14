@@ -70,6 +70,12 @@ Provider attempts have one explicit outcome: `succeeded`, `definitively_rejected
 
 Reservation generations make an explicitly approved retry auditable without changing the stable operation identity. Settlement and administrator reconciliation are idempotent. Successful settlement resolves earlier active transient errors while retaining their historical rows. Browser roles receive no access to the settlement or reconciliation functions.
 
+Migration `0007_v3_openai_response_recovery_context_selection.sql` separates provider success from downstream processing success. OpenAI Responses are created with `store: true`; immediately after the HTTP response returns, the service-role capture transaction stores the response ID, request ID when available, terminal status, bounded output, usage, and exact cost before local JSON/Zod/evidence parsing or profile/query persistence. The transaction settles actual cost once and releases the unused reservation. Parse and persistence failures remain independently retryable from the captured artifact. When the local artifact is incomplete, the runner may retrieve only that exact Response ID; retrieval failure never triggers replacement inference. The first sanitized processing failure is immutable, while later attempts are appended as diagnostics.
+
+OpenAI documents that Responses application state is retained for at least 30 days by default. This recovery design therefore sends only selected public website evidence, stores no hidden reasoning, and retains only bounded provider output needed for deterministic recovery. See [Responses statefulness](https://developers.openai.com/api/docs/guides/migrate-to-responses#4-decide-when-to-use-statefulness) and [data controls](https://developers.openai.com/api/docs/guides/your-data#v1responses).
+
+Before profile inference, a deterministic selector ranks homepage, product/service, solution, pricing, company, proof, team, location, and documentation evidence. It removes repeated lines and near-duplicate pages, selects targeted company/address facts from legal pages, and records every included or excluded snapshot with its reason. Defaults are 48,000 total characters, 12,000 per page, 3,600 configured legal characters, eight pages, and a `0.88` duplicate threshold. Each ordinary page is capped at 25% of total capacity, and legal/admin text is additionally capped below 10% of the context actually selected.
+
 ## Public Progress
 
 PR3 displays only `Request received` and `Preparing research`, with no percentage. It does not expose internal states, IDs, provider errors, stack traces, attempts, queue reads, leases, administrator notes, or costs. Later research stages remain absent until PR4 performs real research.
@@ -82,7 +88,7 @@ PR4 adds `reconcile-provider OPERATION_ID RESOLUTION [--actual-cents N] [--yes]`
 
 ## Local Testing
 
-Unit tests use `MemoryWorkflowQueue` and the existing memory workflow store. PostgreSQL migration tests run migrations `0001` through `0004` in disposable PGlite and provide a local implementation of the official `pgmq.send`, `read`, `set_vt`, and `archive` contracts. They verify atomic rollback, logged queue configuration, visibility redelivery, strict payloads, leases, fencing, dead letters, and administrator retry without connecting to hosted Supabase.
+Unit tests use `MemoryWorkflowQueue` and the existing memory workflow store. PostgreSQL migration tests run migrations `0001` through `0007` in disposable PGlite and provide a local implementation of the official `pgmq.send`, `read`, `set_vt`, and `archive` contracts. They verify atomic rollback, logged queue configuration, visibility redelivery, strict payloads, leases, fencing, dead letters, provider-response recovery, context selection, exact cost settlement, RLS, and administrator retry without connecting to hosted Supabase.
 
 ## Deploy Preview
 

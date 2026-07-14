@@ -40,8 +40,8 @@ describe("PR4 durable provider research runner", () => {
     const analysis = new MockStructuredAnalysisProvider();
     const submit = vi.spyOn(website, "submit");
     const poll = vi.spyOn(website, "poll");
-    const profile = vi.spyOn(analysis, "extractCompanyProfile");
-    const queries = vi.spyOn(analysis, "discoverSearchQueries");
+    const profile = vi.spyOn(analysis, "createCompanyProfileResponse");
+    const queries = vi.spyOn(analysis, "createSearchQueryResponse");
     const runner = createRunner(harness, providers({ website, analysis }));
 
     await expect(runner.runStep(harness.workflow.id, "website_research", "website-owner"))
@@ -130,7 +130,7 @@ describe("PR4 durable provider research runner", () => {
     const harness = await createHarness({ costs: { website: 20, profile: 25, query: 10 } });
     const website = new MockWebsiteResearchProvider();
     const analysis = new MockStructuredAnalysisProvider();
-    vi.spyOn(analysis, "extractCompanyProfile").mockRejectedValueOnce(
+    vi.spyOn(analysis, "createCompanyProfileResponse").mockRejectedValueOnce(
       new ProviderResearchError(
         "configuration_error",
         "provider_authentication_failed",
@@ -217,8 +217,8 @@ describe("PR4 durable provider research runner", () => {
     const website = new MockWebsiteResearchProvider();
     const analysis = new MockStructuredAnalysisProvider();
     const submit = vi.spyOn(website, "submit");
-    const profile = vi.spyOn(analysis, "extractCompanyProfile");
-    const queries = vi.spyOn(analysis, "discoverSearchQueries");
+    const profile = vi.spyOn(analysis, "createCompanyProfileResponse");
+    const queries = vi.spyOn(analysis, "createSearchQueryResponse");
     const queue = new MemoryWorkflowQueue(() => now);
     const payload = harness.workflowStore.snapshot().outbox[0]!.payload;
     await queue.enqueue(payload, "provider-primary");
@@ -247,10 +247,10 @@ describe("PR4 durable provider research runner", () => {
     expect(harness.researchStore.snapshot().operations).toHaveLength(3);
   });
 
-  it("quarantines a paid model result when durable persistence is uncertain", async () => {
+  it("retries business persistence from the captured response without duplicate inference", async () => {
     const harness = await createHarness();
     const analysis = new MockStructuredAnalysisProvider();
-    const extract = vi.spyOn(analysis, "extractCompanyProfile");
+    const extract = vi.spyOn(analysis, "createCompanyProfileResponse");
     const runner = createRunner(harness, providers({ analysis }));
     await runner.runStep(harness.workflow.id, "website_research", "persistence-website-owner");
     vi.spyOn(harness.researchStore, "persistCompanyProfile")
@@ -261,13 +261,23 @@ describe("PR4 durable provider research runner", () => {
       "company_profile_extraction",
       "persistence-profile-owner"
     )).rejects.toMatchObject({
-      classification: "configuration_error",
-      safeCode: "provider_outcome_unknown"
+      classification: "transient",
+      safeCode: "analysis_persistence_interrupted",
+      providerResponseCaptured: true
     });
     expect(harness.researchStore.snapshot().operations.find(
       (operation) => operation.operationKind === "company_profile_extraction"
-    )).toMatchObject({ state: "outcome_unknown" });
+    )).toMatchObject({
+      state: "submitting",
+      outcome: "succeeded",
+      reservedCostCents: 0,
+      processingStatus: "failed"
+    });
     expect(harness.researchStore.snapshot().profiles).toHaveLength(0);
+    expect(harness.researchStore.snapshot().analysisResponses[0]?.artifact).toMatchObject({
+      firstSafeCode: "analysis_persistence_interrupted",
+      currentSafeCode: "analysis_persistence_interrupted"
+    });
 
     await new WorkflowAdministratorService(harness.workflowStore, actor)
       .retryStep(harness.workflow.id, "company_profile_extraction");
@@ -275,8 +285,347 @@ describe("PR4 durable provider research runner", () => {
       harness.workflow.id,
       "company_profile_extraction",
       "persistence-profile-retry-owner"
-    )).rejects.toMatchObject({ safeCode: "provider_outcome_unknown" });
+    )).resolves.toBe("succeeded");
     expect(extract).toHaveBeenCalledOnce();
+    expect(harness.researchStore.snapshot().profiles).toHaveLength(1);
+    expect(harness.researchStore.snapshot().analysisResponses[0]?.artifact).toMatchObject({
+      firstSafeCode: "analysis_persistence_interrupted",
+      currentSafeCode: null,
+      persistenceStatus: "succeeded"
+    });
+  });
+
+  it("recovers after a crash between durable response capture and parsing without spending twice", async () => {
+    const harness = await createHarness({ costs: { website: 0, profile: 30, query: 0 } });
+    const analysis = new MockStructuredAnalysisProvider();
+    const createResponse = vi.spyOn(analysis, "createCompanyProfileResponse");
+    let crashOnce = true;
+    const runner = createRunner(harness, providers({
+      analysis,
+      costs: { website: 0, profile: 30, query: 0 },
+      actualModelCost: 7
+    }), {
+      afterProviderResponseCapture: (stepKey) => {
+        if (stepKey === "company_profile_extraction" && crashOnce) {
+          crashOnce = false;
+          throw new Error("Synthetic crash after durable response capture.");
+        }
+      }
+    });
+    await runner.runStep(harness.workflow.id, "website_research", "capture-crash-website");
+
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "company_profile_extraction",
+      "capture-crash-profile"
+    )).rejects.toMatchObject({
+      safeCode: "analysis_processing_interrupted",
+      providerResponseCaptured: true,
+      processingPhase: "response_capture"
+    });
+
+    const failedSnapshot = harness.researchStore.snapshot();
+    expect(failedSnapshot.operations.find(
+      (operation) => operation.operationKind === "company_profile_extraction"
+    )).toMatchObject({
+      state: "submitting",
+      outcome: "succeeded",
+      providerResponseStatus: "completed",
+      processingStatus: "failed",
+      reservedCostCents: 0,
+      actualCostCents: 7
+    });
+    expect(failedSnapshot.analysisResponses[0]?.artifact).toMatchObject({
+      responseStatus: "completed",
+      firstSafeCode: "analysis_processing_interrupted"
+    });
+    expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
+      .toMatchObject({ reservedCents: 0, spentCents: 7 });
+
+    await new WorkflowAdministratorService(harness.workflowStore, actor)
+      .retryStep(harness.workflow.id, "company_profile_extraction");
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "company_profile_extraction",
+      "capture-crash-recovery"
+    )).resolves.toBe("succeeded");
+
+    expect(createResponse).toHaveBeenCalledOnce();
+    expect(harness.workflowStore.snapshot().costs.filter((entry) => entry.entryType === "actual"))
+      .toEqual([expect.objectContaining({ amountCents: 7 })]);
+    expect(harness.workflowStore.snapshot().costs.filter((entry) => entry.entryType === "release"))
+      .toEqual([expect.objectContaining({ amountCents: 23 })]);
+    expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
+      .toMatchObject({ reservedCents: 0, spentCents: 7 });
+  });
+
+  it("retrieves an incomplete local artifact by response id instead of issuing replacement inference", async () => {
+    const harness = await createHarness();
+    const analysis = new MockStructuredAnalysisProvider();
+    const originalCreate = analysis.createCompanyProfileResponse.bind(analysis);
+    const createResponse = vi.spyOn(analysis, "createCompanyProfileResponse")
+      .mockImplementation(async (input) => {
+        const complete = await originalCreate(input);
+        return {
+          ...complete,
+          outputText: complete.outputText!.slice(0, 24),
+          artifactComplete: false,
+          sanitizedMetadata: { ...complete.sanitizedMetadata, outputTruncated: true }
+        };
+      });
+    const retrieve = vi.spyOn(analysis, "retrieveResponse");
+    const runner = createRunner(harness, providers({ analysis }));
+    await runner.runStep(harness.workflow.id, "website_research", "retrieve-website");
+
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "company_profile_extraction",
+      "retrieve-profile"
+    )).resolves.toBe("succeeded");
+
+    expect(createResponse).toHaveBeenCalledOnce();
+    expect(retrieve).toHaveBeenCalledOnce();
+    expect(harness.researchStore.snapshot().analysisResponses[0]?.artifact).toMatchObject({
+      artifactComplete: true,
+      retrievalAttempts: 1,
+      reconciliationStatus: "recovered",
+      persistenceStatus: "succeeded"
+    });
+  });
+
+  it("does not replace inference when exact-response retrieval fails", async () => {
+    const harness = await createHarness();
+    const analysis = new MockStructuredAnalysisProvider();
+    const originalCreate = analysis.createCompanyProfileResponse.bind(analysis);
+    const createResponse = vi.spyOn(analysis, "createCompanyProfileResponse")
+      .mockImplementation(async (input) => {
+        const complete = await originalCreate(input);
+        return {
+          ...complete,
+          outputText: complete.outputText!.slice(0, 24),
+          artifactComplete: false,
+          sanitizedMetadata: { ...complete.sanitizedMetadata, outputTruncated: true }
+        };
+      });
+    const retrieve = vi.spyOn(analysis, "retrieveResponse").mockRejectedValue(
+      new ProviderResearchError(
+        "transient",
+        "provider_response_retrieval_failed",
+        "The exact stored response is temporarily unavailable.",
+        {
+          retryAfterSeconds: 10,
+          providerResponseCaptured: true,
+          processingPhase: "retrieval"
+        }
+      )
+    );
+    const runner = createRunner(harness, providers({ analysis }));
+    await runner.runStep(harness.workflow.id, "website_research", "retrieve-failure-website");
+
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "company_profile_extraction",
+      "retrieve-failure-profile"
+    )).rejects.toMatchObject({
+      safeCode: "provider_response_retrieval_failed",
+      providerResponseCaptured: true,
+      processingPhase: "retrieval"
+    });
+    await new WorkflowAdministratorService(harness.workflowStore, actor)
+      .retryStep(harness.workflow.id, "company_profile_extraction");
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "company_profile_extraction",
+      "retrieve-failure-retry"
+    )).rejects.toMatchObject({ safeCode: "provider_response_retrieval_failed" });
+
+    expect(createResponse).toHaveBeenCalledOnce();
+    expect(retrieve).toHaveBeenCalledTimes(2);
+    expect(harness.researchStore.snapshot().analysisResponses[0]?.artifact).toMatchObject({
+      artifactComplete: false,
+      reconciliationStatus: "retrieval_failed",
+      retrievalAttempts: 2,
+      firstSafeCode: "provider_response_retrieval_failed"
+    });
+  });
+
+  it("uses the same exact-response recovery boundary for query generation", async () => {
+    const harness = await createHarness();
+    const analysis = new MockStructuredAnalysisProvider();
+    const originalCreate = analysis.createSearchQueryResponse.bind(analysis);
+    const createQueries = vi.spyOn(analysis, "createSearchQueryResponse")
+      .mockImplementation(async (input) => {
+        const complete = await originalCreate(input);
+        return {
+          ...complete,
+          outputText: complete.outputText!.slice(0, 16),
+          artifactComplete: false,
+          sanitizedMetadata: { ...complete.sanitizedMetadata, outputTruncated: true }
+        };
+      });
+    const retrieve = vi.spyOn(analysis, "retrieveResponse");
+    const runner = createRunner(harness, providers({ analysis }));
+    await runner.runStep(harness.workflow.id, "website_research", "query-retrieve-website");
+    await runner.runStep(harness.workflow.id, "company_profile_extraction", "query-retrieve-profile");
+
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "search_query_discovery",
+      "query-retrieve-discovery"
+    )).resolves.toBe("succeeded");
+
+    expect(createQueries).toHaveBeenCalledOnce();
+    expect(retrieve).toHaveBeenCalledOnce();
+    const artifact = harness.researchStore.snapshot().analysisResponses.find(
+      ({ artifact: candidate }) => candidate.providerResponseId.startsWith("mock-queries-")
+    )?.artifact;
+    expect(artifact).toMatchObject({
+      artifactComplete: true,
+      reconciliationStatus: "recovered",
+      persistenceStatus: "succeeded",
+      retrievalAttempts: 1
+    });
+  });
+
+  it("retries query persistence from its captured response without a second query inference", async () => {
+    const harness = await createHarness();
+    const analysis = new MockStructuredAnalysisProvider();
+    const createQueries = vi.spyOn(analysis, "createSearchQueryResponse");
+    const runner = createRunner(harness, providers({ analysis }));
+    await runner.runStep(harness.workflow.id, "website_research", "query-persist-website");
+    await runner.runStep(harness.workflow.id, "company_profile_extraction", "query-persist-profile");
+    vi.spyOn(harness.researchStore, "persistSearchQueries")
+      .mockRejectedValueOnce(new TypeError("Synthetic query-set database interruption."));
+
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "search_query_discovery",
+      "query-persist-failure"
+    )).rejects.toMatchObject({
+      safeCode: "analysis_persistence_interrupted",
+      providerResponseCaptured: true,
+      processingPhase: "persistence"
+    });
+    await new WorkflowAdministratorService(harness.workflowStore, actor)
+      .retryStep(harness.workflow.id, "search_query_discovery");
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "search_query_discovery",
+      "query-persist-retry"
+    )).resolves.toBe("succeeded");
+
+    expect(createQueries).toHaveBeenCalledOnce();
+    const artifact = harness.researchStore.snapshot().analysisResponses.find(
+      ({ artifact: candidate }) => candidate.providerResponseId.startsWith("mock-queries-")
+    )?.artifact;
+    expect(artifact).toMatchObject({
+      firstSafeCode: "analysis_persistence_interrupted",
+      currentSafeCode: null,
+      persistenceStatus: "succeeded"
+    });
+    expect(harness.researchStore.snapshot().querySets).toHaveLength(1);
+  });
+
+  it("quarantines a returned response when durable capture itself cannot be confirmed", async () => {
+    const harness = await createHarness({ costs: { website: 0, profile: 20, query: 0 } });
+    const analysis = new MockStructuredAnalysisProvider();
+    const createResponse = vi.spyOn(analysis, "createCompanyProfileResponse");
+    vi.spyOn(harness.researchStore, "captureAnalysisResponse")
+      .mockRejectedValueOnce(new TypeError("Synthetic capture transaction interruption."));
+    const runner = createRunner(harness, providers({
+      analysis,
+      costs: { website: 0, profile: 20, query: 0 },
+      actualModelCost: 5
+    }));
+    await runner.runStep(harness.workflow.id, "website_research", "capture-failure-website");
+
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "company_profile_extraction",
+      "capture-failure-profile"
+    )).rejects.toMatchObject({
+      safeCode: "analysis_response_capture_failed",
+      outcome: "outcome_uncertain"
+    });
+
+    expect(createResponse).toHaveBeenCalledOnce();
+    expect(harness.researchStore.snapshot().analysisResponses).toHaveLength(0);
+    expect(harness.researchStore.snapshot().operations.find(
+      (operation) => operation.operationKind === "company_profile_extraction"
+    )).toMatchObject({
+      state: "outcome_unknown",
+      reconciliationRequired: true,
+      reservedCostCents: 20,
+      lastSafeErrorCode: "analysis_response_capture_failed"
+    });
+    expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
+      .toMatchObject({ reservedCents: 20, spentCents: 0 });
+  });
+
+  it("recovers when the response-capture commit succeeds but its acknowledgement is lost", async () => {
+    const harness = await createHarness({ costs: { website: 0, profile: 20, query: 0 } });
+    const analysis = new MockStructuredAnalysisProvider();
+    const createResponse = vi.spyOn(analysis, "createCompanyProfileResponse");
+    const originalCapture = harness.researchStore.captureAnalysisResponse.bind(harness.researchStore);
+    vi.spyOn(harness.researchStore, "captureAnalysisResponse")
+      .mockImplementationOnce(async (input, workflowStore) => {
+        await originalCapture(input, workflowStore);
+        throw new TypeError("Synthetic lost acknowledgement after capture commit.");
+      });
+    const runner = createRunner(harness, providers({
+      analysis,
+      costs: { website: 0, profile: 20, query: 0 },
+      actualModelCost: 5
+    }));
+    await runner.runStep(harness.workflow.id, "website_research", "capture-ack-website");
+
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "company_profile_extraction",
+      "capture-ack-profile"
+    )).resolves.toBe("succeeded");
+
+    expect(createResponse).toHaveBeenCalledOnce();
+    expect(harness.researchStore.snapshot().profiles).toHaveLength(1);
+    expect(harness.researchStore.snapshot().operations.find(
+      (operation) => operation.operationKind === "company_profile_extraction"
+    )).toMatchObject({
+      state: "succeeded",
+      outcome: "succeeded",
+      reconciliationRequired: false,
+      reservedCostCents: 0,
+      actualCostCents: 5
+    });
+    expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
+      .toMatchObject({ reservedCents: 0, spentCents: 5 });
+  });
+
+  it("recognizes committed profile persistence when only the database acknowledgement is lost", async () => {
+    const harness = await createHarness();
+    const analysis = new MockStructuredAnalysisProvider();
+    const createResponse = vi.spyOn(analysis, "createCompanyProfileResponse");
+    const originalPersist = harness.researchStore.persistCompanyProfile.bind(harness.researchStore);
+    vi.spyOn(harness.researchStore, "persistCompanyProfile")
+      .mockImplementationOnce(async (input) => {
+        await originalPersist(input);
+        throw new TypeError("Synthetic lost acknowledgement after profile commit.");
+      });
+    const runner = createRunner(harness, providers({ analysis }));
+    await runner.runStep(harness.workflow.id, "website_research", "profile-ack-website");
+
+    await expect(runner.runStep(
+      harness.workflow.id,
+      "company_profile_extraction",
+      "profile-ack-profile"
+    )).resolves.toBe("succeeded");
+
+    expect(createResponse).toHaveBeenCalledOnce();
+    expect(harness.researchStore.snapshot().profiles).toHaveLength(1);
+    expect(harness.researchStore.snapshot().analysisResponses[0]?.artifact).toMatchObject({
+      persistenceStatus: "succeeded",
+      firstSafeCode: null
+    });
+    expect(harness.workflowStore.snapshot().errors).toEqual([]);
   });
 
   it("persists the Firecrawl job id, respects polling delay, and never resubmits the job", async () => {
@@ -442,8 +791,8 @@ describe("PR4 durable provider research runner", () => {
 
     await expect(runner.runStep(harness.workflow.id, "website_research", "unknown-owner-1"))
       .rejects.toMatchObject({
-        classification: "configuration_error",
-        safeCode: "provider_outcome_unknown"
+        classification: "transient",
+        safeCode: "provider_timeout"
       });
     expect(harness.researchStore.snapshot().operations[0]).toMatchObject({
       state: "outcome_unknown",
@@ -583,6 +932,7 @@ function providers(options: {
   analysis?: ProviderResearchProviders["analysis"];
   costs?: { website: number; profile: number; query: number };
   actualWebsiteCost?: number;
+  actualModelCost?: number;
 } = {}): ProviderResearchProviders {
   const costs = options.costs ?? { website: 0, profile: 0, query: 0 };
   return {
@@ -593,7 +943,7 @@ function providers(options: {
       profileReservationCents: costs.profile,
       queryReservationCents: costs.query,
       actualWebsiteCost: () => options.actualWebsiteCost ?? 0,
-      actualModelCost: () => 0
+      actualModelCost: () => options.actualModelCost ?? 0
     },
     maximumPages: 7,
     queryCount: 8,

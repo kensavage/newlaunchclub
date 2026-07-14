@@ -1,8 +1,14 @@
 import {
   COMPANY_PROFILE_PROMPT_VERSION,
+  ProviderResearchError,
   SEARCH_QUERY_PROMPT_VERSION,
+  assertQueriesSupportedByProfile,
+  companyProfileDraftSchema,
+  normalizeDiscoveredQueries,
   type CompanyProfileDraft,
   type CompanyProfileReadModel,
+  type AnalysisResponseArtifactDraft,
+  type ContentSelectionPage,
   type SearchQueryDraft,
   type StructuredAnalysisProvider,
   type WebsiteResearchProvider
@@ -62,16 +68,18 @@ export class MockWebsiteResearchProvider implements WebsiteResearchProvider {
 
 export class MockStructuredAnalysisProvider implements StructuredAnalysisProvider {
   readonly provider = "mock" as const;
+  private readonly responses = new Map<string, Awaited<ReturnType<MockStructuredAnalysisProvider["createCompanyProfileResponse"]>>>();
 
   async checkReadiness() {}
 
-  async extractCompanyProfile(input: {
+  async createCompanyProfileResponse(input: {
     normalizedUrl: string;
     domain: string;
-    pages: Parameters<StructuredAnalysisProvider["extractCompanyProfile"]>[0]["pages"];
+    pages: ContentSelectionPage[];
   }) {
     const companyName = titleCase(input.domain.replace(/^www\./, "").split(".")[0] ?? "Company");
-    const evidence = [{ pageIndex: input.pages[0]!.pageIndex, excerpt: input.pages[0]!.markdown.slice(0, 160) }];
+    const firstPage = input.pages.find((page) => page.included)!;
+    const evidence = [{ pageIndex: firstPage.pageIndex, excerpt: firstPage.selectedMarkdown.slice(0, 160) }];
     const measured = (fieldKey: CompanyProfileDraft["claims"][number]["fieldKey"], value: string) => ({
       fieldKey,
       status: "measured" as const,
@@ -129,18 +137,22 @@ export class MockStructuredAnalysisProvider implements StructuredAnalysisProvide
         }
       ]
     };
-    return {
-      provider: this.provider,
-      model: "mock-structured-analysis-v1",
-      providerRequestId: `mock-profile-${sha256(input.normalizedUrl).slice(0, 24)}`,
-      providerCreatedAt: MOCK_TIME,
-      promptTemplateVersion: COMPANY_PROFILE_PROMPT_VERSION,
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    const response = mockResponseArtifact(
+      `mock-profile-${sha256(input.normalizedUrl).slice(0, 24)}`,
+      COMPANY_PROFILE_PROMPT_VERSION,
+      "company-profile-schema-v2",
       output
-    };
+    );
+    this.responses.set(response.providerResponseId, response);
+    return response;
   }
 
-  async discoverSearchQueries(input: { profile: CompanyProfileReadModel; queryCount: number }) {
+  parseCompanyProfileResponse(input: Parameters<StructuredAnalysisProvider["parseCompanyProfileResponse"]>[0]) {
+    const output = companyProfileDraftSchema.parse(JSON.parse(input.response.outputText!));
+    return parsedMockResult(input.response, output);
+  }
+
+  async createSearchQueryResponse(input: { profile: CompanyProfileReadModel; queryCount: number }) {
     const brand = input.profile.brandName ?? input.profile.companyName ?? new URL(input.profile.website).hostname;
     const industry = input.profile.industry ?? "buyer visibility services";
     const templates: Array<[string, SearchQueryDraft["category"], SearchQueryDraft["intent"]]> = [
@@ -165,16 +177,86 @@ export class MockStructuredAnalysisProvider implements StructuredAnalysisProvide
       rationale: "This query maps to measured company positioning and buyer intent.",
       evidenceClaimKeys: ["industry", "target_customers"] as SearchQueryDraft["evidenceClaimKeys"]
     }));
-    return {
-      provider: this.provider,
-      model: "mock-structured-analysis-v1",
-      providerRequestId: `mock-queries-${sha256(input.profile.profileVersionId).slice(0, 24)}`,
-      providerCreatedAt: MOCK_TIME,
-      promptTemplateVersion: SEARCH_QUERY_PROMPT_VERSION,
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      output: { queries }
-    };
+    const response = mockResponseArtifact(
+      `mock-queries-${sha256(input.profile.profileVersionId).slice(0, 24)}`,
+      SEARCH_QUERY_PROMPT_VERSION,
+      "search-query-schema-v2",
+      { queries }
+    );
+    this.responses.set(response.providerResponseId, response);
+    return response;
   }
+
+  parseSearchQueryResponse(input: Parameters<StructuredAnalysisProvider["parseSearchQueryResponse"]>[0]) {
+    const queries = normalizeDiscoveredQueries(JSON.parse(input.response.outputText!), {
+      maximum: input.queryCount,
+      hasVerifiedGeography: input.profile.claims.some((claim) =>
+        (claim.fieldKey === "geographic_location" || claim.fieldKey === "geographic_service_area") &&
+        claim.status === "measured" && Boolean(claim.value)
+      )
+    });
+    assertQueriesSupportedByProfile(queries, input.profile);
+    return parsedMockResult(input.response, { queries });
+  }
+
+  async retrieveResponse(input: Parameters<StructuredAnalysisProvider["retrieveResponse"]>[0]) {
+    const response = this.responses.get(input.providerResponseId);
+    if (!response) {
+      throw new ProviderResearchError(
+        "transient",
+        "provider_response_retrieval_failed",
+        "The stored mock response could not be retrieved.",
+        { providerResponseCaptured: true, processingPhase: "retrieval" }
+      );
+    }
+    return structuredClone(response);
+  }
+}
+
+function mockResponseArtifact(
+  providerResponseId: string,
+  promptTemplateVersion: string,
+  schemaVersion: string,
+  output: unknown
+) {
+  return {
+    provider: "mock" as const,
+    providerResponseId,
+    providerRequestId: `${providerResponseId}-request`,
+    responseStatus: "completed" as const,
+    model: "mock-structured-analysis-v2",
+    promptTemplateVersion,
+    schemaVersion,
+    providerCreatedAt: MOCK_TIME,
+    responseReceivedAt: MOCK_TIME,
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    outputText: JSON.stringify(output),
+    refusal: null,
+    incompleteReason: null,
+    providerErrorCode: null,
+    artifactComplete: true,
+    sanitizedMetadata: {
+      outputItemTypes: ["message"],
+      messageStatuses: ["completed"],
+      storedForRecovery: true,
+      outputTruncated: false
+    }
+  };
+}
+
+function parsedMockResult<T>(
+  response: AnalysisResponseArtifactDraft,
+  output: T
+) {
+  return {
+    provider: response.provider,
+    model: response.model,
+    providerRequestId: response.providerResponseId,
+    providerCreatedAt: response.providerCreatedAt,
+    promptTemplateVersion: response.promptTemplateVersion,
+    usage: response.usage,
+    output
+  };
 }
 
 function titleCase(value: string) {

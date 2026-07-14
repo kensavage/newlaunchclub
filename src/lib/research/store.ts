@@ -1,12 +1,16 @@
 import type {
   CompanyProfileDraft,
   CompanyProfileReadModel,
+  AnalysisProcessingPhase,
+  AnalysisResponseArtifactDraft,
+  ContentSelectionResult,
   ProviderOperationKind,
   ProviderOperationRecord,
   ProviderOutcome,
   ProviderUsage,
   SearchQueryDraft,
   StructuredAnalysisResult,
+  StoredAnalysisResponseArtifact,
   WebsiteEvidencePage,
   WebsiteResearchPage
 } from "@/lib/research/contracts";
@@ -138,6 +142,37 @@ export interface ProviderResearchStore {
     operationId: string;
     pages: WebsiteEvidencePage[];
   } | null>;
+  persistContentSelection(input: {
+    operationId: string;
+    selection: ContentSelectionResult;
+    now?: string;
+  }): Promise<{ selectionRunId: string }>;
+  getContentSelection(operationId: string): Promise<ContentSelectionResult | null>;
+  getAnalysisResponse(operationId: string): Promise<StoredAnalysisResponseArtifact | null>;
+  captureAnalysisResponse(
+    input: {
+      operationId: string;
+      attemptId: string;
+      response: AnalysisResponseArtifactDraft;
+      actualCostCents: number;
+      now?: string;
+    },
+    workflowStore: WorkflowStore
+  ): Promise<StoredAnalysisResponseArtifact>;
+  recordAnalysisResponseRetrieval(input: {
+    artifactId: string;
+    response: AnalysisResponseArtifactDraft;
+    now?: string;
+  }): Promise<StoredAnalysisResponseArtifact>;
+  recordAnalysisProcessingResult(input: {
+    artifactId: string;
+    phase: AnalysisProcessingPhase;
+    status: "succeeded" | "failed";
+    classification?: FailureClassification | null;
+    safeCode?: string | null;
+    safeSummary?: string | null;
+    now?: string;
+  }): Promise<StoredAnalysisResponseArtifact>;
   persistCompanyProfile(input: {
     operationId: string;
     attemptId: string;

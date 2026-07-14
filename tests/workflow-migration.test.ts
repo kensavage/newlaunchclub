@@ -22,7 +22,8 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       "0003_v3_durable_workflow.sql",
       "0004_v3_supabase_queue.sql",
       "0005_v3_provider_research_evidence.sql",
-      "0006_v3_provider_failure_settlement.sql"
+      "0006_v3_provider_failure_settlement.sql",
+      "0007_v3_openai_response_recovery_context_selection.sql"
     ]) {
       let sql = await readFile(path.join(process.cwd(), "supabase/migrations", name), "utf8");
       if (name.startsWith("0001")) sql = sql.replace("create extension if not exists pgcrypto;", "");
@@ -185,19 +186,25 @@ describe("V3 isolated PostgreSQL migration stack", () => {
               'company_profile_versions', 'company_profile_claims',
               'company_profile_claim_evidence', 'company_profile_entities',
               'company_profile_entity_evidence', 'search_query_sets', 'search_queries',
-              'search_query_claim_evidence', 'provider_operation_reconciliations'
+              'search_query_claim_evidence', 'provider_operation_reconciliations',
+              'analysis_response_artifacts', 'analysis_response_diagnostics',
+              'analysis_response_retrieval_attempts', 'content_selection_runs',
+              'content_selection_pages'
             ) and c.relrowsecurity) rls_tables,
           (select count(*)::integer from information_schema.role_table_grants
             where grantee in ('anon', 'authenticated') and table_schema = 'public'
               and table_name in ('provider_operations', 'research_artifacts', 'source_snapshots',
-                'model_invocations', 'company_profile_versions', 'search_queries')) browser_grants
+                'model_invocations', 'company_profile_versions', 'search_queries',
+                'analysis_response_artifacts', 'analysis_response_diagnostics',
+                'analysis_response_retrieval_attempts', 'content_selection_runs',
+                'content_selection_pages')) browser_grants
       `);
       expect(state.rows[0]).toEqual({
         provider_steps: 3,
         total_steps: 8,
         status: "dispatch_pending",
         queued: 2,
-        rls_tables: 15,
+        rls_tables: 20,
         browser_grants: 0
       });
 
@@ -220,11 +227,28 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       await db.exec("savepoint browser_table_denial");
       await expect(db.query("select * from public.research_artifacts")).rejects.toThrow(/permission denied/i);
       await db.exec("rollback to savepoint browser_table_denial; release savepoint browser_table_denial");
+      await db.exec("savepoint browser_response_denial");
+      await expect(db.query("select * from public.analysis_response_artifacts"))
+        .rejects.toThrow(/permission denied/i);
+      await db.exec("rollback to savepoint browser_response_denial; release savepoint browser_response_denial");
       await db.exec("savepoint browser_rpc_denial");
       await expect(db.query(`select reserve_v3_provider_operation_cost(gen_random_uuid(), now())`))
         .rejects.toThrow(/permission denied/i);
       await db.exec("rollback to savepoint browser_rpc_denial; release savepoint browser_rpc_denial");
+      await db.exec("savepoint browser_recovery_rpc_denial");
+      await expect(db.query(`select get_v3_analysis_response(gen_random_uuid())`))
+        .rejects.toThrow(/permission denied/i);
+      await db.exec("rollback to savepoint browser_recovery_rpc_denial; release savepoint browser_recovery_rpc_denial");
       await db.exec("rollback to savepoint browser_denial; release savepoint browser_denial; reset role");
+
+      await db.exec("savepoint service_role_scope");
+      await db.exec("set local role service_role");
+      await db.exec("savepoint service_role_table_denial");
+      await expect(db.query("select * from public.analysis_response_artifacts"))
+        .rejects.toThrow(/permission denied/i);
+      await db.exec("rollback to savepoint service_role_table_denial; release savepoint service_role_table_denial");
+      await expect(db.query(`select get_v3_analysis_response(gen_random_uuid())`)).resolves.toBeDefined();
+      await db.exec("rollback to savepoint service_role_scope; release savepoint service_role_scope; reset role");
     } finally {
       await db.exec("rollback");
     }
@@ -816,6 +840,163 @@ describe("V3 isolated PostgreSQL migration stack", () => {
         available: 395,
         reconciliations: 1
       });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("captures analysis responses and context selection atomically with immutable failure history", async () => {
+    await db.exec("begin");
+    try {
+      const context = await setupProviderWorkflow(db, "response-recovery.example", "x");
+      const website = await beginLeasedProviderOperation(db, {
+        workflowId: context.workflowId,
+        kind: "website_research",
+        provider: "firecrawl",
+        owner: "response-recovery-website",
+        suffix: "response-recovery-website",
+        cost: 10
+      });
+      const websiteContent = [
+        "Example Labs provides buyer research for B2B growth teams.",
+        "Its documented methodology and public case studies help customers make evidence-based decisions."
+      ].join(" ");
+      const storedPage = await db.query<{ stored: { snapshotId: string } }>(storeWebsitePageSql({
+        operationId: website.operationId,
+        content: websiteContent
+      }));
+      await db.query(`select complete_website_research_operation(
+        '${website.operationId}', '${website.providerAttemptId}', 200,
+        '{"creditsUsed":1}'::jsonb, 2, now(), now()
+      )`);
+      await db.query(settleProviderSql({
+        ...website,
+        providerAttemptId: null,
+        outcome: "succeeded",
+        classification: null,
+        safeCode: null,
+        safeSummary: null,
+        retryAt: "null"
+      }));
+
+      const profile = await beginLeasedProviderOperation(db, {
+        workflowId: context.workflowId,
+        kind: "company_profile_extraction",
+        provider: "mock",
+        owner: "response-recovery-profile",
+        suffix: "response-recovery-profile",
+        cost: 30
+      });
+      const snapshotId = storedPage.rows[0]!.stored.snapshotId;
+      const selectionPage = {
+        snapshotId,
+        pageIndex: 0,
+        classification: "homepage",
+        rank: 1,
+        included: true,
+        inclusionReason: "Selected as homepage business evidence.",
+        exclusionReason: null,
+        originalCharacters: websiteContent.length,
+        selectedCharacters: websiteContent.length,
+        selectedOrder: 1,
+        selectedContentHash: sha256(websiteContent),
+        selectedMarkdown: websiteContent
+      };
+      const persistSelection = `select persist_v3_content_selection(
+        '${profile.operationId}', 'company-profile-context-v1', '${sha256("selection-input")}',
+        '{"maximumTotalCharacters":48000,"maximumPageCharacters":12000,"maximumLegalCharacters":3600,"maximumPages":8,"duplicateThreshold":0.88}'::jsonb,
+        ${websiteContent.length}, ${websiteContent.length}, 0,
+        ${sqlJson([selectionPage])}, now()
+      ) selection`;
+      await db.query(persistSelection);
+      await db.query(persistSelection);
+
+      const output = JSON.stringify(syntheticCompanyProfile("https://response-recovery.example/"));
+      const capture = `select capture_v3_analysis_response(
+        '${profile.operationId}', '${profile.providerAttemptId}',
+        'resp_recovery_profile', 'request_recovery_profile', 'completed',
+        'mock-structured-analysis-v2', 'company-profile-v2', 'company-profile-schema-v2',
+        now(), now(), '{"inputTokens":120,"outputTokens":40,"totalTokens":160,"cachedInputTokens":0}'::jsonb,
+        7, ${sqlLiteral(output)}, null, null, null, true,
+        '{"outputItemTypes":["message"],"messageStatuses":["completed"],"storedForRecovery":true,"outputTruncated":false}'::jsonb,
+        now()
+      ) artifact`;
+      const firstCapture = await db.query<{ artifact: { id: string; actualCostCents: number } }>(capture);
+      const duplicateCapture = await db.query<{ artifact: { id: string; actualCostCents: number } }>(capture);
+      expect(duplicateCapture.rows[0]?.artifact).toEqual(firstCapture.rows[0]?.artifact);
+
+      const artifactId = firstCapture.rows[0]!.artifact.id;
+      await db.query(`select record_v3_analysis_processing_result(
+        '${artifactId}', 'parse', 'failed', 'permanent',
+        'structured_output_schema_invalid', 'Captured output failed schema validation.', now()
+      )`);
+      await db.query(`select record_v3_analysis_processing_result(
+        '${artifactId}', 'persistence', 'failed', 'transient',
+        'analysis_persistence_interrupted', 'Business persistence was interrupted.', now()
+      )`);
+      await db.query(`select record_v3_analysis_processing_result(
+        '${artifactId}', 'parse', 'succeeded', null, null, null, now()
+      )`);
+
+      const state = await db.query<{
+        provider_state: string;
+        provider_outcome: string;
+        provider_response_status: string;
+        processing_status: string;
+        first_code: string;
+        current_code: string | null;
+        reserved: number;
+        spent: number;
+        actual_entries: number;
+        release_entries: number;
+        diagnostics: number;
+        selections: number;
+        selection_pages: number;
+      }>(`
+        select po.operation_state provider_state, po.outcome_class provider_outcome,
+          po.provider_response_status, po.processing_status,
+          a.first_safe_code first_code, a.current_safe_code current_code,
+          b.reserved_cents reserved, b.spent_cents spent,
+          (select count(*)::integer from report_cost_entries
+            where idempotency_key like '%response-recovery-profile%:provider-response:%:actual') actual_entries,
+          (select count(*)::integer from report_cost_entries
+            where idempotency_key like '%response-recovery-profile%:provider-response:%:unused') release_entries,
+          (select count(*)::integer from analysis_response_diagnostics
+            where analysis_response_artifact_id = a.id) diagnostics,
+          (select count(*)::integer from content_selection_runs
+            where provider_operation_id = po.id) selections,
+          (select count(*)::integer from content_selection_pages csp
+            join content_selection_runs csr on csr.id = csp.content_selection_run_id
+            where csr.provider_operation_id = po.id) selection_pages
+        from provider_operations po
+        join analysis_response_artifacts a on a.provider_operation_id = po.id
+        join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${profile.operationId}'
+      `);
+      expect(state.rows[0]).toEqual({
+        provider_state: "submitting",
+        provider_outcome: "succeeded",
+        provider_response_status: "completed",
+        processing_status: "processing",
+        first_code: "structured_output_schema_invalid",
+        current_code: null,
+        reserved: 0,
+        spent: 9,
+        actual_entries: 1,
+        release_entries: 1,
+        diagnostics: 3,
+        selections: 1,
+        selection_pages: 1
+      });
+
+      await expectSqlFailure(db, "first_failure_immutable", () => db.query(`
+        update analysis_response_artifacts set first_safe_code = 'overwritten'
+        where id = '${artifactId}'
+      `), /first_analysis_failure_is_immutable/);
+      await expectSqlFailure(db, "artifact_identity_immutable", () => db.query(`
+        update analysis_response_artifacts set actual_cost_cents = 8
+        where id = '${artifactId}'
+      `), /analysis_response_identity_is_immutable/);
     } finally {
       await db.exec("rollback");
     }

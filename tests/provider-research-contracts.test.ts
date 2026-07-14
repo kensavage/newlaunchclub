@@ -13,6 +13,7 @@ import {
   createProviderResearchProviders,
   getProviderResearchReservationPolicy
 } from "@/lib/research/provider-factory";
+import { selectCompanyProfileContext } from "@/lib/research/context-selection";
 import {
   syntheticCompanyProfile,
   syntheticCompanyProfileReadModel,
@@ -99,15 +100,16 @@ describe("PR4 provider contracts and selection", () => {
     });
     expect(firstPoll).toEqual(secondPoll);
 
-    const firstProfile = await providers.analysis.extractCompanyProfile({
+    const selectedPages = selectCompanyProfileContext(syntheticEvidencePages()).pages;
+    const firstProfile = await providers.analysis.createCompanyProfileResponse({
       normalizedUrl: "https://example.com/",
       domain: "example.com",
-      pages: syntheticEvidencePages()
+      pages: selectedPages
     });
-    const secondProfile = await providers.analysis.extractCompanyProfile({
+    const secondProfile = await providers.analysis.createCompanyProfileResponse({
       normalizedUrl: "https://example.com/",
       domain: "example.com",
-      pages: syntheticEvidencePages()
+      pages: selectedPages
     });
     await providers.analysis.checkReadiness();
     expect(firstProfile).toEqual(secondProfile);

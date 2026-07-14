@@ -4,9 +4,11 @@ import {
   assertQueriesSupportedByProfile,
   normalizeDiscoveredQueries,
   type CompanyProfileReadModel,
+  type ContentSelectionResult,
   type ProviderOperationKind,
   type ProviderOperationRecord,
   type SearchQueryDraft,
+  type StoredAnalysisResponseArtifact,
   type WebsiteEvidencePage
 } from "@/lib/research/contracts";
 import { sha256 } from "@/lib/research/integrity";
@@ -52,6 +54,20 @@ interface MemoryQuerySetRecord {
   queries: SearchQueryDraft[];
 }
 
+interface MemoryAnalysisResponseRecord {
+  artifact: StoredAnalysisResponseArtifact;
+}
+
+interface MemoryProcessingDiagnostic {
+  artifactId: string;
+  phase: StoredAnalysisResponseArtifact["processingPhase"];
+  status: "succeeded" | "failed";
+  classification: StoredAnalysisResponseArtifact["currentFailureClassification"];
+  safeCode: string | null;
+  safeSummary: string | null;
+  createdAt: string;
+}
+
 export class MemoryProviderResearchStore implements ProviderResearchStore {
   private readonly inputs = new Map<string, ProviderResearchInput>();
   private readonly operations = new Map<string, ProviderOperationRecord>();
@@ -60,6 +76,9 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
   private readonly pages: MemoryPageRecord[] = [];
   private readonly profiles: MemoryProfileRecord[] = [];
   private readonly querySets: MemoryQuerySetRecord[] = [];
+  private readonly contentSelections = new Map<string, ContentSelectionResult>();
+  private readonly analysisResponses = new Map<string, MemoryAnalysisResponseRecord>();
+  private readonly processingDiagnostics: MemoryProcessingDiagnostic[] = [];
 
   constructor(inputs: ProviderResearchInput[] = []) {
     for (const input of inputs) this.inputs.set(input.workflowId, structuredClone(input));
@@ -112,6 +131,10 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
       lastSafeErrorSummary: null,
       providerStartedAt: null,
       providerCompletedAt: null,
+      providerResponseStatus: null,
+      providerResponseReceivedAt: null,
+      processingStatus: "pending",
+      processingPhase: null,
       createdAt: now,
       updatedAt: now
     };
@@ -121,7 +144,7 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
   }
 
   async getOperation(workflowId: string, operationKind: ProviderOperationKind) {
-    return [...this.operations.values()].find(
+    return [...this.operations.values()].reverse().find(
       (operation) => operation.workflowId === workflowId && operation.operationKind === operationKind
     ) ?? null;
   }
@@ -154,7 +177,9 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
       operation.settledAt = null;
       operation.reservationGeneration += 1;
     }
-    if (operation.state === "succeeded" || operation.reservedCostCents > 0) return operation;
+    if (operation.state === "succeeded" || operation.outcome === "succeeded" || operation.reservedCostCents > 0) {
+      return operation;
+    }
     if (operation.estimatedCostCents > 0) {
       await workflowStore.reserveCost({
         workflowId: operation.workflowId,
@@ -480,6 +505,8 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
     if (!this.pages.some((page) => page.operationId === operation.id)) throw new Error("Website research has no pages.");
     this.finishAttempt(input.attemptId, operation.id, "succeeded");
     operation.state = "succeeded";
+    operation.processingStatus = "succeeded";
+    operation.processingPhase = "complete";
     operation.actualCostCents = input.actualCostCents;
     operation.providerUsage = structuredClone(input.providerUsage);
     operation.lastHttpStatus = input.httpStatus;
@@ -498,6 +525,167 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
         .sort((left, right) => left.page.pageIndex - right.page.pageIndex)
         .map((page) => structuredClone(page.page))
     };
+  }
+
+  async persistContentSelection(input: Parameters<ProviderResearchStore["persistContentSelection"]>[0]) {
+    const existing = this.contentSelections.get(input.operationId);
+    if (existing) {
+      if (existing.inputHash !== input.selection.inputHash) {
+        throw new Error("Content-selection idempotency conflict.");
+      }
+      return { selectionRunId: `memory-selection:${input.operationId}` };
+    }
+    this.requireOperation(input.operationId);
+    this.contentSelections.set(input.operationId, structuredClone(input.selection));
+    return { selectionRunId: `memory-selection:${input.operationId}` };
+  }
+
+  async getContentSelection(operationId: string) {
+    const selection = this.contentSelections.get(operationId);
+    return selection ? structuredClone(selection) : null;
+  }
+
+  async getAnalysisResponse(operationId: string) {
+    const record = this.analysisResponses.get(operationId);
+    return record ? structuredClone(record.artifact) : null;
+  }
+
+  async captureAnalysisResponse(
+    input: Parameters<ProviderResearchStore["captureAnalysisResponse"]>[0],
+    workflowStore: WorkflowStore
+  ) {
+    const operation = this.requireOperation(input.operationId);
+    const existing = this.analysisResponses.get(operation.id);
+    if (existing) {
+      if (existing.artifact.providerResponseId !== input.response.providerResponseId) {
+        throw new Error("Analysis-response idempotency conflict.");
+      }
+      return structuredClone(existing.artifact);
+    }
+    if (operation.operationKind === "website_research") throw new Error("Analysis operation required.");
+    if (input.actualCostCents > operation.reservedCostCents && input.actualCostCents !== 0) {
+      throw new Error("Provider cost exceeded reservation.");
+    }
+    const now = input.now ?? new Date().toISOString();
+    if (operation.reservedCostCents > 0) {
+      await workflowStore.recordActualCost({
+        workflowId: operation.workflowId,
+        stepId: operation.stepId,
+        attemptId: null,
+        reservedCents: operation.reservedCostCents,
+        actualCents: input.actualCostCents,
+        idempotencyKey: `${operation.idempotencyKey}:provider-response:${operation.reservationGeneration}:actual`,
+        now
+      });
+    }
+    operation.state = "submitting";
+    operation.providerJobId = input.response.providerResponseId;
+    operation.reservedCostCents = 0;
+    operation.actualCostCents = input.actualCostCents;
+    operation.outcome = "succeeded";
+    operation.reconciliationRequired = false;
+    operation.providerUsage = structuredClone(input.response.usage);
+    operation.providerCompletedAt = input.response.responseReceivedAt;
+    operation.providerResponseStatus = input.response.responseStatus;
+    operation.providerResponseReceivedAt = input.response.responseReceivedAt;
+    operation.processingStatus = "pending";
+    operation.processingPhase = "response_capture";
+    operation.settledAt = now;
+    operation.updatedAt = now;
+    const artifact: StoredAnalysisResponseArtifact = {
+      id: crypto.randomUUID(),
+      operationId: operation.id,
+      providerAttemptId: input.attemptId,
+      ...structuredClone(input.response),
+      actualCostCents: input.actualCostCents,
+      parseStatus: "pending",
+      parseAttempts: 0,
+      persistenceStatus: "pending",
+      persistenceAttempts: 0,
+      processingPhase: "response_capture",
+      firstFailureClassification: null,
+      firstSafeCode: null,
+      firstSafeSummary: null,
+      currentFailureClassification: null,
+      currentSafeCode: null,
+      currentSafeSummary: null,
+      reconciliationStatus: input.response.artifactComplete ? "not_required" : "retrieval_required",
+      retrievalAttempts: 0,
+      parsedAt: null,
+      persistedAt: null
+    };
+    this.analysisResponses.set(operation.id, { artifact });
+    return structuredClone(artifact);
+  }
+
+  async recordAnalysisResponseRetrieval(
+    input: Parameters<ProviderResearchStore["recordAnalysisResponseRetrieval"]>[0]
+  ) {
+    const record = this.requireAnalysisArtifact(input.artifactId);
+    if (record.artifact.providerResponseId !== input.response.providerResponseId) {
+      throw new Error("Retrieved response identifier mismatch.");
+    }
+    const response = structuredClone(input.response);
+    Object.assign(record.artifact, response, {
+      id: record.artifact.id,
+      operationId: record.artifact.operationId,
+      providerAttemptId: record.artifact.providerAttemptId,
+      actualCostCents: record.artifact.actualCostCents,
+      retrievalAttempts: record.artifact.retrievalAttempts + 1,
+      reconciliationStatus: response.artifactComplete ? "recovered" : "retrieval_required",
+      processingPhase: "retrieval"
+    });
+    return structuredClone(record.artifact);
+  }
+
+  async recordAnalysisProcessingResult(
+    input: Parameters<ProviderResearchStore["recordAnalysisProcessingResult"]>[0]
+  ) {
+    const record = this.requireAnalysisArtifact(input.artifactId);
+    const artifact = record.artifact;
+    const now = input.now ?? new Date().toISOString();
+    if (input.phase === "parse" || input.phase === "response_validation" || input.phase === "evidence_validation") {
+      artifact.parseAttempts += 1;
+      artifact.parseStatus = input.status;
+      if (input.status === "succeeded") artifact.parsedAt = now;
+    }
+    if (input.phase === "persistence" || input.phase === "complete") {
+      artifact.persistenceAttempts += 1;
+      artifact.persistenceStatus = input.status;
+      if (input.status === "succeeded") artifact.persistedAt = now;
+    }
+    if (input.phase === "retrieval" && input.status === "failed") {
+      artifact.retrievalAttempts += 1;
+      artifact.reconciliationStatus = "retrieval_failed";
+    }
+    artifact.processingPhase = input.phase;
+    if (input.status === "failed") {
+      artifact.firstFailureClassification ??= input.classification ?? null;
+      artifact.firstSafeCode ??= input.safeCode ?? null;
+      artifact.firstSafeSummary ??= input.safeSummary ?? null;
+      artifact.currentFailureClassification = input.classification ?? null;
+      artifact.currentSafeCode = input.safeCode ?? null;
+      artifact.currentSafeSummary = input.safeSummary ?? null;
+      this.requireOperation(artifact.operationId).processingStatus = "failed";
+    } else {
+      artifact.currentFailureClassification = null;
+      artifact.currentSafeCode = null;
+      artifact.currentSafeSummary = null;
+      this.requireOperation(artifact.operationId).processingStatus = input.phase === "complete"
+        ? "succeeded"
+        : "processing";
+    }
+    this.requireOperation(artifact.operationId).processingPhase = input.phase;
+    this.processingDiagnostics.push({
+      artifactId: artifact.id,
+      phase: input.phase,
+      status: input.status,
+      classification: input.classification ?? null,
+      safeCode: input.safeCode ?? null,
+      safeSummary: input.safeSummary ?? null,
+      createdAt: now
+    });
+    return structuredClone(artifact);
   }
 
   async persistCompanyProfile(input: Parameters<ProviderResearchStore["persistCompanyProfile"]>[0]) {
@@ -565,8 +753,10 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
       modelInvocationId,
       providerRequestId: input.result.providerRequestId
     });
-    this.finishAttempt(input.attemptId, operation.id, "succeeded");
+    this.finishAttemptIdempotently(input.attemptId, operation.id, "succeeded");
     operation.state = "succeeded";
+    operation.processingStatus = "succeeded";
+    operation.processingPhase = "complete";
     operation.actualCostCents = input.actualCostCents;
     operation.providerUsage = structuredClone(input.result.usage);
     operation.providerCompletedAt = input.now ?? new Date().toISOString();
@@ -612,8 +802,10 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
       queries
     };
     this.querySets.push(querySet);
-    this.finishAttempt(input.attemptId, operation.id, "succeeded");
+    this.finishAttemptIdempotently(input.attemptId, operation.id, "succeeded");
     operation.state = "succeeded";
+    operation.processingStatus = "succeeded";
+    operation.processingPhase = "complete";
     operation.actualCostCents = input.actualCostCents;
     operation.providerUsage = structuredClone(input.result.usage);
     operation.providerCompletedAt = input.now ?? new Date().toISOString();
@@ -631,7 +823,10 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
       attempts: this.attempts,
       pages: this.pages,
       profiles: this.profiles,
-      querySets: this.querySets
+      querySets: this.querySets,
+      contentSelections: [...this.contentSelections.entries()],
+      analysisResponses: [...this.analysisResponses.values()],
+      processingDiagnostics: this.processingDiagnostics
     });
   }
 
@@ -639,6 +834,12 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
     const operation = this.operations.get(operationId);
     if (!operation) throw new Error("Provider operation not found.");
     return operation;
+  }
+
+  private requireAnalysisArtifact(artifactId: string) {
+    const record = [...this.analysisResponses.values()].find((item) => item.artifact.id === artifactId);
+    if (!record) throw new Error("Analysis response artifact not found.");
+    return record;
   }
 
   private finishAttempt(attemptId: string, operationId: string, state: MemoryAttempt["state"]) {

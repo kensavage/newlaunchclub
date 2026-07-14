@@ -54,6 +54,14 @@ const serverEnvSchema = z.object({
   V3_PROVIDER_QUERY_COUNT: integerEnvSchema(18, 5, 30),
   V3_PROVIDER_POLL_INTERVAL_SECONDS: integerEnvSchema(10, 2, 300),
   V3_PROVIDER_EVIDENCE_TTL_HOURS: integerEnvSchema(48, 1, 720),
+  V3_PROFILE_CONTEXT_MAX_CHARACTERS: integerEnvSchema(48_000, 4_000, 120_000),
+  V3_PROFILE_CONTEXT_MAX_PAGE_CHARACTERS: integerEnvSchema(12_000, 1_000, 30_000),
+  V3_PROFILE_CONTEXT_MAX_LEGAL_CHARACTERS: integerEnvSchema(3_600, 0, 12_000),
+  V3_PROFILE_CONTEXT_MAX_PAGES: integerEnvSchema(8, 1, 20),
+  V3_PROFILE_CONTEXT_DUPLICATE_THRESHOLD: z.preprocess(
+    (value) => (value === "" || value === undefined ? undefined : value),
+    z.coerce.number().min(0.5).max(1).default(0.88)
+  ),
   V3_PROVIDER_MAX_RESERVATION_CENTS: integerEnvSchema(400, 0, 400),
   V3_FIRECRAWL_RESERVATION_CENTS: integerEnvSchema(160, 0, 400),
   V3_OPENAI_PROFILE_RESERVATION_CENTS: integerEnvSchema(120, 0, 400),

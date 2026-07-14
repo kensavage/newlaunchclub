@@ -4,6 +4,7 @@ import { ProviderResearchError } from "@/lib/research/contracts";
 import { FirecrawlWebsiteResearchProvider } from "@/lib/research/firecrawl-provider";
 import { sha256 } from "@/lib/research/integrity";
 import { OpenAIStructuredAnalysisProvider } from "@/lib/research/openai-provider";
+import { selectCompanyProfileContext } from "@/lib/research/context-selection";
 import { requestProviderJson } from "@/lib/research/provider-http";
 import {
   SYNTHETIC_RESEARCH_TIME,
@@ -209,10 +210,15 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       { fetchImplementation: fetchMock }
     );
 
-    const profileResult = await provider.extractCompanyProfile({
+    const evidencePages = syntheticEvidencePages();
+    const profileResponse = await provider.createCompanyProfileResponse({
       normalizedUrl: "https://example.com/",
       domain: "example.com",
-      pages: syntheticEvidencePages()
+      pages: selectCompanyProfileContext(evidencePages).pages
+    });
+    const profileResult = provider.parseCompanyProfileResponse({
+      response: profileResponse,
+      evidencePages
     });
     expect(profileResult).toMatchObject({
       provider: "openai",
@@ -222,7 +228,12 @@ describe("PR4 provider adapters with mocked HTTP", () => {
     });
     expect(profileResult.output.entities).toContainEqual(expect.objectContaining({ type: "trust_signal" }));
 
-    const queryResult = await provider.discoverSearchQueries({
+    const queryResponse = await provider.createSearchQueryResponse({
+      profile: syntheticCompanyProfileReadModel(),
+      queryCount: 3
+    });
+    const queryResult = provider.parseSearchQueryResponse({
+      response: queryResponse,
       profile: syntheticCompanyProfileReadModel(),
       queryCount: 3
     });
@@ -231,7 +242,7 @@ describe("PR4 provider adapters with mocked HTTP", () => {
     const openAiBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(openAiBody).toMatchObject({
       model: "gpt-5.4-nano",
-      store: false,
+      store: true,
       text: { format: { type: "json_schema" } }
     });
     expect(JSON.stringify(openAiBody.text.format.schema)).not.toContain('"format":"uri"');
@@ -257,14 +268,18 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       }
     );
 
-    await expect(provider.extractCompanyProfile({
+    const response = await provider.createCompanyProfileResponse({
       normalizedUrl: "https://example.com/",
       domain: "example.com",
-      pages: syntheticEvidencePages()
-    })).rejects.toMatchObject({
-      safeCode: "structured_analysis_failed",
-      outcome: "outcome_uncertain"
+      pages: selectCompanyProfileContext(syntheticEvidencePages()).pages
     });
+    expect(() => provider.parseCompanyProfileResponse({
+      response,
+      evidencePages: syntheticEvidencePages()
+    })).toThrow(expect.objectContaining({
+      safeCode: "structured_output_schema_invalid",
+      providerResponseCaptured: true
+    }));
   });
 
   it("checks OpenAI model readiness with the same credential and without inference", async () => {
@@ -325,15 +340,19 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       "gpt-5.4-nano",
       { fetchImplementation: vi.fn(async () => openAiResponse(profile, "resp_bad_evidence", 10, 10)) }
     );
-    await expect(provider.extractCompanyProfile({
+    const response = await provider.createCompanyProfileResponse({
       normalizedUrl: "https://example.com/",
       domain: "example.com",
-      pages: syntheticEvidencePages()
-    })).rejects.toMatchObject({
+      pages: selectCompanyProfileContext(syntheticEvidencePages()).pages
+    });
+    expect(() => provider.parseCompanyProfileResponse({
+      response,
+      evidencePages: syntheticEvidencePages()
+    })).toThrow(expect.objectContaining({
       classification: "permanent",
       safeCode: "structured_evidence_invalid",
-      outcome: "outcome_uncertain"
-    });
+      providerResponseCaptured: true
+    }));
 
     const fabricatedExcerpt = syntheticCompanyProfile();
     fabricatedExcerpt.claims[0]!.evidence[0]!.excerpt = "This sentence is not present in the stored page.";
@@ -347,11 +366,131 @@ describe("PR4 provider adapters with mocked HTTP", () => {
         10
       )) }
     );
-    await expect(fabricatedProvider.extractCompanyProfile({
+    const fabricatedResponse = await fabricatedProvider.createCompanyProfileResponse({
       normalizedUrl: "https://example.com/",
       domain: "example.com",
-      pages: syntheticEvidencePages()
-    })).rejects.toMatchObject({ safeCode: "structured_evidence_invalid" });
+      pages: selectCompanyProfileContext(syntheticEvidencePages()).pages
+    });
+    expect(() => fabricatedProvider.parseCompanyProfileResponse({
+      response: fabricatedResponse,
+      evidencePages: syntheticEvidencePages()
+    })).toThrow(expect.objectContaining({ safeCode: "structured_evidence_invalid" }));
+  });
+
+  it.each([
+    {
+      name: "completed response with no output",
+      response: openAiEnvelope({ id: "resp_missing_output", output: [] }),
+      safeCode: "structured_output_missing",
+      phase: "response_validation"
+    },
+    {
+      name: "incomplete response at the output-token limit",
+      response: openAiEnvelope({
+        id: "resp_token_limit",
+        status: "incomplete",
+        incompleteReason: "max_output_tokens",
+        content: [{ type: "output_text", annotations: [], logprobs: [], text: "{}" }]
+      }),
+      safeCode: "provider_output_incomplete",
+      phase: "response_validation"
+    },
+    {
+      name: "content-filtered response",
+      response: openAiEnvelope({
+        id: "resp_content_filter",
+        status: "incomplete",
+        incompleteReason: "content_filter",
+        content: []
+      }),
+      safeCode: "provider_content_filtered",
+      phase: "response_validation"
+    },
+    {
+      name: "provider refusal",
+      response: openAiEnvelope({
+        id: "resp_refusal",
+        content: [{ type: "refusal", refusal: "Synthetic refusal." }]
+      }),
+      safeCode: "provider_response_refused",
+      phase: "response_validation"
+    },
+    {
+      name: "invalid structured JSON",
+      response: openAiEnvelope({
+        id: "resp_invalid_json",
+        content: [{ type: "output_text", annotations: [], logprobs: [], text: "{" }]
+      }),
+      safeCode: "structured_output_invalid_json",
+      phase: "parse"
+    }
+  ])("captures then classifies $name without losing provider success", async ({ response, safeCode, phase }) => {
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-openai-key",
+      "gpt-5.4-nano",
+      { fetchImplementation: vi.fn(async () => response) }
+    );
+
+    const artifact = await provider.createCompanyProfileResponse({
+      normalizedUrl: "https://example.com/",
+      domain: "example.com",
+      pages: selectCompanyProfileContext(syntheticEvidencePages()).pages
+    });
+    expect(artifact.providerResponseId).toMatch(/^resp_/);
+    expect(() => provider.parseCompanyProfileResponse({
+      response: artifact,
+      evidencePages: syntheticEvidencePages()
+    })).toThrow(expect.objectContaining({
+      safeCode,
+      providerResponseCaptured: true,
+      processingPhase: phase
+    }));
+  });
+
+  it("retrieves an exact stored OpenAI Response and classifies retrieval failure without reinference", async () => {
+    const profile = syntheticCompanyProfile();
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v1/responses/resp_recoverable")) {
+        return openAiResponse(profile, "resp_recoverable", 90, 30);
+      }
+      return jsonResponse({
+        error: { message: "Synthetic missing response.", type: "invalid_request_error" }
+      }, 404);
+    });
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-openai-key",
+      "gpt-5.4-nano",
+      { fetchImplementation: fetchMock }
+    );
+
+    const recovered = await provider.retrieveResponse({
+      providerResponseId: "resp_recoverable",
+      promptTemplateVersion: "company-profile-v2",
+      schemaVersion: "company-profile-schema-v2"
+    });
+    expect(recovered).toMatchObject({
+      providerResponseId: "resp_recoverable",
+      responseStatus: "completed",
+      artifactComplete: true,
+      usage: { inputTokens: 90, outputTokens: 30, totalTokens: 120 }
+    });
+    expect(provider.parseCompanyProfileResponse({
+      response: recovered,
+      evidencePages: syntheticEvidencePages()
+    }).output.companyName).toBe("Example Labs");
+
+    await expect(provider.retrieveResponse({
+      providerResponseId: "resp_missing",
+      promptTemplateVersion: "company-profile-v2",
+      schemaVersion: "company-profile-schema-v2"
+    })).rejects.toMatchObject({
+      safeCode: "provider_response_retrieval_failed",
+      providerResponseCaptured: true,
+      processingPhase: "retrieval"
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.every(([input]) => String(input).includes("/v1/responses/"))).toBe(true);
   });
 
   it("treats a malformed successful OpenAI response as an uncertain paid outcome", async () => {
@@ -366,10 +505,10 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       }
     );
 
-    await expect(provider.extractCompanyProfile({
+    await expect(provider.createCompanyProfileResponse({
       normalizedUrl: "https://example.com/",
       domain: "example.com",
-      pages: syntheticEvidencePages()
+      pages: selectCompanyProfileContext(syntheticEvidencePages()).pages
     })).rejects.toMatchObject({
       safeCode: "structured_analysis_failed",
       outcome: "outcome_uncertain",
@@ -452,25 +591,44 @@ function jsonResponse(
 }
 
 function openAiResponse(output: unknown, id: string, inputTokens: number, outputTokens: number) {
-  return jsonResponse({
+  return openAiEnvelope({
     id,
+    content: [{
+      type: "output_text",
+      annotations: [],
+      logprobs: [],
+      text: JSON.stringify(output)
+    }],
+    inputTokens,
+    outputTokens
+  });
+}
+
+function openAiEnvelope(options: {
+  id: string;
+  status?: "completed" | "incomplete";
+  incompleteReason?: "max_output_tokens" | "content_filter";
+  output?: unknown[];
+  content?: unknown[];
+  inputTokens?: number;
+  outputTokens?: number;
+}) {
+  const inputTokens = options.inputTokens ?? 10;
+  const outputTokens = options.outputTokens ?? 10;
+  return jsonResponse({
+    id: options.id,
     object: "response",
     created_at: Date.parse(SYNTHETIC_RESEARCH_TIME) / 1_000,
-    status: "completed",
+    status: options.status ?? "completed",
     error: null,
-    incomplete_details: null,
+    incomplete_details: options.incompleteReason ? { reason: options.incompleteReason } : null,
     model: "gpt-5.4-nano",
-    output: [{
-      id: `${id}_message`,
+    output: options.output ?? [{
+      id: `${options.id}_message`,
       type: "message",
-      status: "completed",
+      status: options.status ?? "completed",
       role: "assistant",
-      content: [{
-        type: "output_text",
-        annotations: [],
-        logprobs: [],
-        text: JSON.stringify(output)
-      }]
+      content: options.content ?? []
     }],
     usage: {
       input_tokens: inputTokens,
