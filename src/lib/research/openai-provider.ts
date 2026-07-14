@@ -84,6 +84,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
               "Build a factual company profile using only the supplied selected website evidence.",
               "Return every required claim field exactly once.",
               "Use measured only when a page excerpt directly supports the value.",
+              "Every evidence excerpt must be one contiguous exact substring copied from the supplied markdown; do not paraphrase, combine snippets, or insert ellipses.",
               "Use inferred for a cautious interpretation, unavailable when the site does not say, and unmeasured when the requested concept cannot be evaluated.",
               "Measured claims and entities must cite the original pageIndex and a short verbatim excerpt. Never invent people, locations, reviews, proof, competitors, products, or services.",
               "A likely competitor may be included only if the website explicitly names or compares it.",
@@ -131,9 +132,9 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
     evidencePages: WebsiteEvidencePage[];
   }) {
     const raw = parseResponseJson(input.response);
-    let output: ReturnType<typeof companyProfileDraftSchema.parse>;
+    let parsed: ReturnType<typeof companyProfileDraftSchema.parse>;
     try {
-      output = companyProfileDraftSchema.parse(canonicalizeCompanyProfileFields(raw));
+      parsed = companyProfileDraftSchema.parse(canonicalizeCompanyProfileFields(raw));
     } catch (error) {
       throw processingError(
         "structured_output_schema_invalid",
@@ -142,7 +143,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
         error
       );
     }
-    assertEvidencePointers(output, input.evidencePages);
+    const output = groundCompanyProfileEvidence(parsed, input.evidencePages);
     return structuredResult(input.response, output);
   }
 
@@ -427,25 +428,92 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function assertEvidencePointers(
+function groundCompanyProfileEvidence(
   profile: ReturnType<typeof companyProfileDraftSchema.parse>,
   pages: WebsiteEvidencePage[]
 ) {
   const pagesByIndex = new Map(pages.map((page) => [page.pageIndex, page]));
-  const pointers = [
-    ...profile.claims.flatMap((claim) => claim.evidence),
-    ...profile.entities.flatMap((entity) => entity.evidence)
-  ];
-  if (pointers.some((pointer) => {
-    const page = pagesByIndex.get(pointer.pageIndex);
-    return !page || !page.markdown.includes(pointer.excerpt);
-  })) {
+  const claims = profile.claims.map((claim) => {
+    const evidence = groundedEvidence(claim.evidence, pagesByIndex);
+    if (claim.status !== "measured" || evidence.length > 0) {
+      return { ...claim, evidence };
+    }
+    const repaired = exactAnchorEvidence(claim.evidence, claim.value, pagesByIndex);
+    if (!repaired) throw invalidEvidence();
+    return { ...claim, evidence: [repaired] };
+  });
+  const entities = profile.entities.map((entity) => {
+    const evidence = groundedEvidence(entity.evidence, pagesByIndex);
+    if (entity.status !== "measured" || evidence.length > 0) {
+      return { ...entity, evidence };
+    }
+    const repaired = exactAnchorEvidence(entity.evidence, entity.name, pagesByIndex);
+    if (!repaired) throw invalidEvidence();
+    return { ...entity, evidence: [repaired] };
+  });
+
+  try {
+    return companyProfileDraftSchema.parse(canonicalizeCompanyProfileFields({
+      ...profile,
+      claims,
+      entities
+    }));
+  } catch (error) {
     throw processingError(
       "structured_evidence_invalid",
       "The captured company profile cited website evidence that was not supplied.",
-      "evidence_validation"
+      "evidence_validation",
+      error
     );
   }
+}
+
+type EvidencePointer = ReturnType<typeof companyProfileDraftSchema.parse>["claims"][number]["evidence"][number];
+
+function groundedEvidence(
+  pointers: EvidencePointer[],
+  pagesByIndex: Map<number, WebsiteEvidencePage>
+) {
+  const seen = new Set<string>();
+  return pointers.filter((pointer) => {
+    const page = pagesByIndex.get(pointer.pageIndex);
+    if (!page || !evidenceTextMatches(page.markdown, pointer.excerpt)) return false;
+    const key = `${pointer.pageIndex}:${normalizeEvidenceText(pointer.excerpt)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function exactAnchorEvidence(
+  pointers: EvidencePointer[],
+  anchor: string | null,
+  pagesByIndex: Map<number, WebsiteEvidencePage>
+): EvidencePointer | null {
+  if (!anchor || anchor.length > 1_000) return null;
+  for (const pointer of pointers) {
+    const page = pagesByIndex.get(pointer.pageIndex);
+    if (page?.markdown.includes(anchor)) {
+      return { pageIndex: pointer.pageIndex, excerpt: anchor };
+    }
+  }
+  return null;
+}
+
+function evidenceTextMatches(source: string, excerpt: string) {
+  return source.includes(excerpt) || normalizeEvidenceText(source).includes(normalizeEvidenceText(excerpt));
+}
+
+function normalizeEvidenceText(value: string) {
+  return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function invalidEvidence() {
+  return processingError(
+    "structured_evidence_invalid",
+    "The captured company profile cited website evidence that was not supplied.",
+    "evidence_validation"
+  );
 }
 
 function hasMeasuredGeography(profile: CompanyProfileReadModel) {

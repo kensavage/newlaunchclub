@@ -371,7 +371,7 @@ describe("PR4 provider adapters with mocked HTTP", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("GET");
   });
 
-  it("rejects OpenAI evidence pointers that do not identify stored pages", async () => {
+  it("rejects OpenAI evidence pointers that cannot be grounded on the cited page", async () => {
     const profile = syntheticCompanyProfile();
     profile.claims[0]!.evidence[0]!.pageIndex = 9;
     const provider = new OpenAIStructuredAnalysisProvider(
@@ -393,13 +393,19 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       providerResponseCaptured: true
     }));
 
-    const fabricatedExcerpt = syntheticCompanyProfile();
-    fabricatedExcerpt.claims[0]!.evidence[0]!.excerpt = "This sentence is not present in the stored page.";
+    const fabricatedClaim = syntheticCompanyProfile();
+    fabricatedClaim.companyName = "Fabricated Company";
+    fabricatedClaim.claims[0] = {
+      ...fabricatedClaim.claims[0]!,
+      value: "Fabricated Company",
+      normalizedValue: "fabricated company",
+      evidence: [{ pageIndex: 0, excerpt: "This sentence is not present in the stored page." }]
+    };
     const fabricatedProvider = new OpenAIStructuredAnalysisProvider(
       "synthetic-openai-key",
       "gpt-5.4-nano",
       { fetchImplementation: vi.fn(async () => openAiResponse(
-        fabricatedExcerpt,
+        fabricatedClaim,
         "resp_bad_excerpt",
         10,
         10
@@ -414,6 +420,86 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       response: fabricatedResponse,
       evidencePages: syntheticEvidencePages()
     })).toThrow(expect.objectContaining({ safeCode: "structured_evidence_invalid" }));
+  });
+
+  it("grounds captured evidence without accepting paraphrases", async () => {
+    const pages = syntheticEvidencePages();
+    pages[0] = {
+      ...pages[0]!,
+      markdown: `${pages[0]!.markdown}\n\nBuyer research is the core service.`
+    };
+    const profile = syntheticCompanyProfile();
+    profile.claims[0] = {
+      ...profile.claims[0]!,
+      evidence: [{ pageIndex: 0, excerpt: "A paraphrased company-name citation." }]
+    };
+    profile.claims[6] = {
+      ...profile.claims[6]!,
+      evidence: [
+        ...profile.claims[6]!.evidence.map((pointer) => ({ ...pointer })),
+        { pageIndex: 0, excerpt: "A second pointer that is not present in the page." }
+      ]
+    };
+    profile.entities[0] = {
+      ...profile.entities[0]!,
+      evidence: [{ pageIndex: 0, excerpt: "A paraphrased service citation." }]
+    };
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-openai-key",
+      "gpt-5.4-nano",
+      { fetchImplementation: vi.fn(async () => openAiResponse(
+        profile,
+        "resp_grounded_evidence",
+        10,
+        10
+      )) }
+    );
+    const response = await provider.createCompanyProfileResponse({
+      normalizedUrl: "https://example.com/",
+      domain: "example.com",
+      pages: selectCompanyProfileContext(pages).pages
+    });
+    const result = provider.parseCompanyProfileResponse({
+      response,
+      evidencePages: pages
+    });
+
+    expect(result.output.claims[0]?.evidence).toEqual([
+      { pageIndex: 0, excerpt: "Example Labs" }
+    ]);
+    expect(result.output.claims[6]?.evidence).toHaveLength(1);
+    expect(result.output.entities[0]?.evidence).toEqual([
+      { pageIndex: 0, excerpt: "Buyer research" }
+    ]);
+  });
+
+  it("accepts evidence that differs only by Unicode and whitespace normalization", async () => {
+    const pages = syntheticEvidencePages();
+    pages[0] = {
+      ...pages[0]!,
+      markdown: pages[0]!.markdown.replace("research for", "research\nfor")
+    };
+    const profile = syntheticCompanyProfile();
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-openai-key",
+      "gpt-5.4-nano",
+      { fetchImplementation: vi.fn(async () => openAiResponse(
+        profile,
+        "resp_normalized_evidence",
+        10,
+        10
+      )) }
+    );
+    const response = await provider.createCompanyProfileResponse({
+      normalizedUrl: "https://example.com/",
+      domain: "example.com",
+      pages: selectCompanyProfileContext(pages).pages
+    });
+
+    expect(() => provider.parseCompanyProfileResponse({
+      response,
+      evidencePages: pages
+    })).not.toThrow();
   });
 
   it.each([
