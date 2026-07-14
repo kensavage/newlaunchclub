@@ -533,6 +533,11 @@ export class MemoryWorkflowStore implements WorkflowStore {
         attempt.outcome = "succeeded";
         attempt.finishedAt = now;
       }
+      for (const error of this.state.errors) {
+        if (error.stepId === step.id && error.classification === "transient" && !error.resolvedAt) {
+          error.resolvedAt = now;
+        }
+      }
       this.addEvent(workflowId, "step_succeeded", workflowId, "orchestrator", { step: stepKey }, now);
       if (stepKey === "mark_ready_for_provider_research") {
         workflow.status = "ready_for_provider_research";
@@ -559,13 +564,22 @@ export class MemoryWorkflowStore implements WorkflowStore {
       lease.releasedAt = now;
       const attempt = this.currentAttempt(step.id);
       const mayRetry = input.classification === "transient" && step.attemptCount < step.maximumAttempts;
-      step.status = mayRetry ? "retry_scheduled" : "failed_terminal";
+      const cancelled = input.classification === "cancelled";
+      step.status = cancelled ? "cancelled" : mayRetry ? "retry_scheduled" : "failed_terminal";
       step.scheduledAt = input.retryAt ?? now;
       step.updatedAt = now;
-      workflow.status = mayRetry ? "waiting_retry" : input.classification === "budget_blocked" ? "paused" : "failed";
+      workflow.status = cancelled
+        ? "cancelled"
+        : mayRetry
+          ? "waiting_retry"
+          : input.classification === "budget_blocked" || input.classification === "configuration_error"
+            ? "paused"
+            : "failed";
+      if (workflow.status === "paused") workflow.pausedAt = now;
+      if (workflow.status === "cancelled") workflow.cancelledAt = now;
       workflow.updatedAt = now;
       if (attempt) {
-        attempt.outcome = mayRetry ? "retry_scheduled" : "failed";
+        attempt.outcome = cancelled ? "cancelled" : mayRetry ? "retry_scheduled" : "failed";
         attempt.retryClassification = input.classification;
         attempt.safeErrorCode = input.safeCode.slice(0, 80);
         attempt.safeErrorSummary = input.safeSummary.slice(0, 240);

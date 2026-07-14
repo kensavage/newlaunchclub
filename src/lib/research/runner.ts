@@ -24,6 +24,12 @@ export interface ProviderResearchRunnerOptions {
   afterProviderPersistence?: (stepKey: ProviderResearchWorkflowStepKey) => void | Promise<void>;
 }
 
+interface ProviderStepContext {
+  workflowAttemptId: string;
+  owner: string;
+  fencingToken: number;
+}
+
 export class ProviderResearchWorkflowRunner {
   private readonly leaseSeconds: number;
   private readonly maximumAttempts: number;
@@ -62,39 +68,66 @@ export class ProviderResearchWorkflowRunner {
     const workflowAttemptId = lease.attemptId;
 
     try {
+      const context: ProviderStepContext = {
+        workflowAttemptId,
+        owner,
+        fencingToken: acquiredLease.fencingToken
+      };
       const outputReference = await this.withHeartbeat(
         workflowId,
         providerStep,
         owner,
         acquiredLease.fencingToken,
-        () => this.executeProviderStep(workflowId, providerStep, lease.step.maximumAttempts, workflowAttemptId)
+        () => this.executeProviderStep(workflowId, providerStep, lease.step.maximumAttempts, context)
       );
       await this.options.afterProviderPersistence?.(providerStep);
-      const completed = await this.workflowStore.completeStep({
-        workflowId,
-        stepKey: providerStep,
-        owner,
-        fencingToken: acquiredLease.fencingToken,
-        outputReference,
-        now: this.now().toISOString()
-      });
-      return completed ? "succeeded" as const : "lease_conflict" as const;
+      await this.settleSuccessfulOperation(workflowId, providerStep, context, outputReference);
+      return "succeeded" as const;
     } catch (error) {
       const failure = safeProviderFailure(error);
+      if (failure.workflowSettled) throw failure;
+      const context: ProviderStepContext = {
+        workflowAttemptId,
+        owner,
+        fencingToken: acquiredLease.fencingToken
+      };
+      const operation = await this.researchStore.getOperation(workflowId, providerStep);
+      if (operation?.state === "succeeded") {
+        await this.settleSuccessfulOperation(
+          workflowId,
+          providerStep,
+          context,
+          `provider-operation:${operation.id}`
+        );
+        return "succeeded" as const;
+      }
       const retryAt = new Date(
         this.now().getTime() + (failure.retryAfterSeconds ?? retryDelaySeconds(lease.step.attemptCount)) * 1_000
       ).toISOString();
-      await this.workflowStore.failStep({
-        workflowId,
-        stepKey: providerStep,
-        owner,
-        fencingToken: acquiredLease.fencingToken,
-        classification: failure.classification,
-        safeCode: failure.safeCode,
-        safeSummary: failure.safeSummary,
-        retryAt,
-        now: this.now().toISOString()
-      });
+      if (failure.classification === "configuration_error") {
+        await this.researchStore.blockProviderConfiguration({
+          workflowId,
+          stepKey: providerStep,
+          workflowAttemptId,
+          owner,
+          fencingToken: acquiredLease.fencingToken,
+          safeCode: failure.safeCode,
+          safeSummary: "Provider research requires administrator configuration.",
+          now: this.now().toISOString()
+        }, this.workflowStore);
+      } else {
+        await this.workflowStore.failStep({
+          workflowId,
+          stepKey: providerStep,
+          owner,
+          fencingToken: acquiredLease.fencingToken,
+          classification: failure.classification,
+          safeCode: failure.safeCode,
+          safeSummary: failure.safeSummary,
+          retryAt,
+          now: this.now().toISOString()
+        });
+      }
       if (failure.classification === "lease_conflict") return "lease_conflict" as const;
       throw failure;
     }
@@ -104,7 +137,7 @@ export class ProviderResearchWorkflowRunner {
     workflowId: string,
     stepKey: ProviderResearchWorkflowStepKey,
     stepMaximumAttempts: number,
-    workflowAttemptId: string
+    context: ProviderStepContext
   ) {
     const input = await this.researchStore.getResearchInput(workflowId);
     if (!input || input.legacyPublicId) {
@@ -115,19 +148,26 @@ export class ProviderResearchWorkflowRunner {
       );
     }
     if (stepKey === "website_research") {
-      return this.runWebsiteResearch(input, stepMaximumAttempts, workflowAttemptId);
+      return this.runWebsiteResearch(input, stepMaximumAttempts, context);
     }
     if (stepKey === "company_profile_extraction") {
-      return this.runCompanyProfile(input, stepMaximumAttempts, workflowAttemptId);
+      return this.runCompanyProfile(input, stepMaximumAttempts, context);
     }
-    return this.runSearchQueryDiscovery(input, stepMaximumAttempts, workflowAttemptId);
+    return this.runSearchQueryDiscovery(input, stepMaximumAttempts, context);
   }
 
   private async runWebsiteResearch(
     input: NonNullable<Awaited<ReturnType<ProviderResearchStore["getResearchInput"]>>>,
     maximumAttempts: number,
-    workflowAttemptId: string
+    context: ProviderStepContext
   ) {
+    const existingOperation = await this.researchStore.getOperation(
+      input.workflowId,
+      "website_research"
+    );
+    if (!this.providers.mockMode && !existingOperation) {
+      await this.providers.analysis.checkReadiness();
+    }
     const requestFingerprint = sha256(stableJson({
       requestFingerprint: input.requestFingerprint,
       operation: "website_research",
@@ -144,7 +184,6 @@ export class ProviderResearchWorkflowRunner {
       maximumAttempts
     });
     if (operation.state === "succeeded") {
-      await this.settleOperation(operation, workflowAttemptId);
       return `provider-operation:${operation.id}`;
     }
     assertOperationCanRun(operation);
@@ -168,8 +207,7 @@ export class ProviderResearchWorkflowRunner {
           now: this.now().toISOString()
         });
       } catch (error) {
-        await this.reconcileOperationFailure(current, attempt.attemptId, error);
-        throw safeProviderFailure(error);
+        throw await this.reconcileOperationFailure(current, attempt.attemptId, error, context);
       }
     }
 
@@ -181,16 +219,6 @@ export class ProviderResearchWorkflowRunner {
         maximumPages: this.providers.maximumPages
       });
       if (result.state === "running") {
-        const retryAt = new Date(this.now().getTime() + result.retryAfterSeconds * 1_000).toISOString();
-        await this.researchStore.scheduleOperationRetry({
-          operationId: current.id,
-          attemptId: pollAttempt.attemptId,
-          httpStatus: result.httpStatus,
-          retryAt,
-          safeCode: "provider_job_pending",
-          safeSummary: "Website research is still running.",
-          now: this.now().toISOString()
-        });
         throw new ProviderResearchError(
           "transient",
           "provider_job_pending",
@@ -212,20 +240,16 @@ export class ProviderResearchWorkflowRunner {
         providerCompletedAt: result.providerCompletedAt,
         now: this.now().toISOString()
       });
-      await this.settleOperation(current, workflowAttemptId);
       return `provider-operation:${current.id}`;
     } catch (error) {
-      if (safeProviderFailure(error).safeCode !== "provider_job_pending") {
-        await this.reconcileOperationFailure(current, pollAttempt.attemptId, error);
-      }
-      throw safeProviderFailure(error);
+      throw await this.reconcileOperationFailure(current, pollAttempt.attemptId, error, context);
     }
   }
 
   private async runCompanyProfile(
     input: NonNullable<Awaited<ReturnType<ProviderResearchStore["getResearchInput"]>>>,
     maximumAttempts: number,
-    workflowAttemptId: string
+    context: ProviderStepContext
   ) {
     const evidence = await this.researchStore.getWebsiteEvidence(input.workflowId);
     if (!evidence?.pages.length) {
@@ -249,7 +273,6 @@ export class ProviderResearchWorkflowRunner {
       maximumAttempts
     });
     if (operation.state === "succeeded") {
-      await this.settleOperation(operation, workflowAttemptId);
       return `provider-operation:${operation.id}`;
     }
     assertOperationCanRun(operation);
@@ -291,18 +314,16 @@ export class ProviderResearchWorkflowRunner {
         providerCompletedAt: completedAt,
         updatedAt: completedAt
       };
-      await this.settleOperation(operation, workflowAttemptId);
       return `company-profile:${persisted.profileVersionId}`;
     } catch (error) {
-      await this.reconcileOperationFailure(operation, attempt.attemptId, error);
-      throw safeProviderFailure(error);
+      throw await this.reconcileOperationFailure(operation, attempt.attemptId, error, context);
     }
   }
 
   private async runSearchQueryDiscovery(
     input: NonNullable<Awaited<ReturnType<ProviderResearchStore["getResearchInput"]>>>,
     maximumAttempts: number,
-    workflowAttemptId: string
+    context: ProviderStepContext
   ) {
     const profile = await this.researchStore.getLatestCompanyProfile(input.workflowId);
     if (!profile) {
@@ -327,7 +348,6 @@ export class ProviderResearchWorkflowRunner {
       maximumAttempts
     });
     if (operation.state === "succeeded") {
-      await this.settleOperation(operation, workflowAttemptId);
       return `provider-operation:${operation.id}`;
     }
     assertOperationCanRun(operation);
@@ -369,11 +389,9 @@ export class ProviderResearchWorkflowRunner {
         providerCompletedAt: completedAt,
         updatedAt: completedAt
       };
-      await this.settleOperation(operation, workflowAttemptId);
       return `search-query-set:${persisted.querySetId}`;
     } catch (error) {
-      await this.reconcileOperationFailure(operation, attempt.attemptId, error);
-      throw safeProviderFailure(error);
+      throw await this.reconcileOperationFailure(operation, attempt.attemptId, error, context);
     }
   }
 
@@ -397,81 +415,80 @@ export class ProviderResearchWorkflowRunner {
       maximumAttempts: Math.max(this.maximumAttempts, input.maximumAttempts),
       now: this.now().toISOString()
     });
-    await this.workflowStore.reserveCost({
-      workflowId: input.workflowId,
-      stepId: operation.stepId,
-      amountCents: operation.estimatedCostCents,
-      idempotencyKey: `${idempotencyKey}:reserve`,
-      now: this.now().toISOString()
-    });
-    return operation;
+    if (["succeeded", "outcome_unknown", "cancelled"].includes(operation.state)) return operation;
+    return this.researchStore.reserveOperationCost(
+      operation.id,
+      this.workflowStore,
+      this.now().toISOString()
+    );
   }
 
-  private async settleOperation(operation: ProviderOperationRecord, workflowAttemptId: string) {
-    if (operation.actualCostCents === null) {
+  private async settleSuccessfulOperation(
+    workflowId: string,
+    stepKey: ProviderResearchWorkflowStepKey,
+    context: ProviderStepContext,
+    outputReference: string
+  ) {
+    const operation = await this.researchStore.getOperation(workflowId, stepKey);
+    if (!operation || operation.state !== "succeeded" || operation.actualCostCents === null) {
       throw new ProviderResearchError(
         "configuration_error",
         "provider_cost_missing",
         "The stored provider operation has no settled cost."
       );
     }
-    await this.workflowStore.recordActualCost({
-      workflowId: operation.workflowId,
-      stepId: operation.stepId,
-      attemptId: workflowAttemptId,
-      reservedCents: operation.estimatedCostCents,
-      actualCents: operation.actualCostCents,
-      idempotencyKey: `${operation.idempotencyKey}:actual`,
-      now: this.now().toISOString()
-    });
+    try {
+      await this.researchStore.settleProviderOperation({
+        operationId: operation.id,
+        providerAttemptId: null,
+        workflowAttemptId: context.workflowAttemptId,
+        owner: context.owner,
+        fencingToken: context.fencingToken,
+        outcome: "succeeded",
+        classification: null,
+        httpStatus: operation.lastHttpStatus,
+        safeCode: null,
+        safeSummary: null,
+        retryAt: null,
+        outputReference,
+        now: this.now().toISOString()
+      }, this.workflowStore);
+    } catch (error) {
+      throw settlementStorageFailure(error);
+    }
   }
 
   private async reconcileOperationFailure(
     operation: ProviderOperationRecord,
     attemptId: string,
-    error: unknown
+    error: unknown,
+    context: ProviderStepContext
   ) {
     const failure = safeProviderFailure(error);
     const current = await this.researchStore.getOperation(operation.workflowId, operation.operationKind);
-    if (current?.state === "succeeded" || current?.state === "retry_scheduled" ||
-      (current?.state === "submitted" && failure.safeCode === "provider_job_pending")) return;
-    const recoverablePreExecutionFailure = !failure.outcomeUncertain && !operation.providerJobId &&
-      RECOVERABLE_PRE_EXECUTION_FAILURE_CODES.has(failure.safeCode);
-    if ((failure.classification === "transient" && !failure.outcomeUncertain) ||
-      recoverablePreExecutionFailure) {
-      const retryAt = new Date(
-        this.now().getTime() + (failure.retryAfterSeconds ?? 10) * 1_000
-      ).toISOString();
-      await this.researchStore.scheduleOperationRetry({
+    if (current?.state === "succeeded") return failure;
+    const retryAt = failure.outcome === "transient_retryable"
+      ? new Date(this.now().getTime() + (failure.retryAfterSeconds ?? 10) * 1_000).toISOString()
+      : null;
+    try {
+      await this.researchStore.settleProviderOperation({
         operationId: operation.id,
-        attemptId,
+        providerAttemptId: attemptId,
+        workflowAttemptId: context.workflowAttemptId,
+        owner: context.owner,
+        fencingToken: context.fencingToken,
+        outcome: failure.outcome,
+        classification: failure.classification,
         httpStatus: failure.httpStatus,
-        retryAt,
         safeCode: failure.safeCode,
         safeSummary: failure.safeSummary,
+        retryAt,
+        outputReference: null,
         now: this.now().toISOString()
-      });
-      return;
-    }
-    await this.researchStore.failOperation({
-      operationId: operation.id,
-      attemptId,
-      state: failure.outcomeUncertain ? "outcome_unknown" :
-        failure.classification === "cancelled" ? "cancelled" : "failed",
-      httpStatus: failure.httpStatus,
-      safeCode: failure.safeCode,
-      safeSummary: failure.safeSummary,
-      now: this.now().toISOString()
-    });
-    if (!failure.outcomeUncertain && !operation.providerJobId &&
-      SAFE_RELEASE_FAILURE_CODES.has(failure.safeCode)) {
-      await this.workflowStore.releaseCost({
-        workflowId: operation.workflowId,
-        stepId: operation.stepId,
-        amountCents: operation.estimatedCostCents,
-        idempotencyKey: `${operation.idempotencyKey}:release`,
-        now: this.now().toISOString()
-      });
+      }, this.workflowStore);
+      return markWorkflowSettled(failure);
+    } catch (settlementError) {
+      throw settlementStorageFailure(settlementError);
     }
   }
 
@@ -513,15 +530,6 @@ export class ProviderResearchWorkflowRunner {
     }
   }
 }
-
-const RECOVERABLE_PRE_EXECUTION_FAILURE_CODES = new Set([
-  "provider_authentication_failed",
-  "provider_credits_unavailable"
-]);
-
-const SAFE_RELEASE_FAILURE_CODES = new Set([
-  "provider_request_rejected"
-]);
 
 export class ProviderResearchContinuation {
   constructor(
@@ -583,7 +591,8 @@ function assertOperationCanRun(operation: ProviderOperationRecord) {
     throw new ProviderResearchError(
       "configuration_error",
       "provider_outcome_unknown",
-      "A prior provider outcome requires administrator review."
+      "A prior provider outcome requires administrator review.",
+      { outcome: "outcome_uncertain" }
     );
   }
   if (operation.state === "failed") {
@@ -603,7 +612,8 @@ function safeProviderFailure(error: unknown) {
         "A provider submission outcome requires administrator review.",
         {
           httpStatus: error.httpStatus,
-          outcomeUncertain: true,
+          outcome: "outcome_uncertain",
+          workflowSettled: error.workflowSettled,
           cause: error
         }
       );
@@ -631,7 +641,36 @@ function persistenceOutcomeUnknown(error: unknown) {
     "configuration_error",
     "provider_persistence_outcome_unknown",
     "A paid provider result could not be reconciled safely with durable storage.",
-    { outcomeUncertain: true, cause: error }
+    { outcome: "outcome_uncertain", cause: error }
+  );
+}
+
+function markWorkflowSettled(error: ProviderResearchError) {
+  return new ProviderResearchError(
+    error.classification,
+    error.safeCode,
+    error.safeSummary,
+    {
+      retryAfterSeconds: error.retryAfterSeconds ?? undefined,
+      httpStatus: error.httpStatus,
+      outcome: error.outcome,
+      workflowSettled: true,
+      cause: error
+    }
+  );
+}
+
+function settlementStorageFailure(error: unknown) {
+  return new ProviderResearchError(
+    "transient",
+    "provider_settlement_interrupted",
+    "Provider settlement was interrupted and will be reconciled safely.",
+    {
+      retryAfterSeconds: 10,
+      outcome: "outcome_uncertain",
+      workflowSettled: true,
+      cause: error
+    }
   );
 }
 

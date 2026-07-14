@@ -10,10 +10,10 @@ const researchSources = [
   path.join(root, "netlify/runtime/provider-research-runtime.ts"),
   path.join(root, "netlify/functions/v3-report-workflow-background.mts")
 ].map((filePath) => readFileSync(filePath, "utf8")).join("\n");
-const migration = readFileSync(
-  path.join(root, "supabase/migrations/0005_v3_provider_research_evidence.sql"),
-  "utf8"
-);
+const migration = [
+  "0005_v3_provider_research_evidence.sql",
+  "0006_v3_provider_failure_settlement.sql"
+].map((name) => readFileSync(path.join(root, "supabase/migrations", name), "utf8")).join("\n");
 const envSchema = readFileSync(path.join(root, "src/lib/env-schema.ts"), "utf8");
 
 describe("PR4 provider research security and scope boundaries", () => {
@@ -37,7 +37,7 @@ describe("PR4 provider research security and scope boundaries", () => {
     expect(researchSources).not.toMatch(/next\/|from ["']server-only["']/);
   });
 
-  it("never completes a report or performs delivery in migration 0005", () => {
+  it("never completes a report or performs delivery in PR4 migrations", () => {
     expect(migration).toContain("ready_for_search_intelligence");
     expect(migration).not.toMatch(/set\s+status\s*=\s*'completed'/i);
     expect(migration).not.toMatch(/insert\s+into\s+public\.(?:report_results|report_jobs)/i);
@@ -48,6 +48,21 @@ describe("PR4 provider research security and scope boundaries", () => {
     expect(migration).toContain("enable row level security");
     expect(migration).toContain("from public, anon, authenticated");
     expect(migration).toMatch(/grant execute on function public\.prepare_v3_provider_research[\s\S]+to service_role/);
+    for (const functionName of [
+      "reserve_v3_provider_operation_cost",
+      "settle_v3_provider_operation",
+      "block_v3_provider_configuration",
+      "admin_reconcile_v3_provider_operation"
+    ]) {
+      expect(migration).toContain(`function public.${functionName}(`);
+      expect(migration).toMatch(new RegExp(
+        `revoke execute on function public\\.${functionName}\\([\\s\\S]+?from public, anon, authenticated;`
+      ));
+      expect(migration).toMatch(new RegExp(
+        `grant execute on function public\\.${functionName}\\([\\s\\S]+?to service_role;`
+      ));
+    }
+    expect(migration).toContain("alter table public.provider_operation_reconciliations enable row level security");
     expect(migration).not.toMatch(/grant[^;]+(?:anon|authenticated)/i);
   });
 });

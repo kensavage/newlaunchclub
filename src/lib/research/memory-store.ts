@@ -15,6 +15,7 @@ import type {
   ProviderResearchInput,
   ProviderResearchStore
 } from "@/lib/research/store";
+import type { WorkflowStore } from "@/lib/workflow/store";
 
 interface MemoryAttempt {
   id: string;
@@ -99,7 +100,12 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
       maximumAttempts: input.maximumAttempts,
       nextRetryAt: null,
       estimatedCostCents: input.estimatedCostCents,
+      reservedCostCents: 0,
       actualCostCents: null,
+      outcome: null,
+      reconciliationRequired: false,
+      reservationGeneration: 1,
+      settledAt: null,
       providerUsage: {},
       lastHttpStatus: null,
       lastSafeErrorCode: null,
@@ -118,6 +124,239 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
     return [...this.operations.values()].find(
       (operation) => operation.workflowId === workflowId && operation.operationKind === operationKind
     ) ?? null;
+  }
+
+  async reserveOperationCost(
+    operationId: string,
+    workflowStore: WorkflowStore,
+    now = new Date().toISOString()
+  ) {
+    const operation = this.requireOperation(operationId);
+    if (operation.reconciliationRequired || operation.state === "outcome_unknown") {
+      throw new Error("Provider operation requires reconciliation.");
+    }
+    const detail = await workflowStore.getWorkflowDetail(operation.workflowId);
+    const step = detail?.steps.find((candidate) => candidate.stepKey === operation.operationKind);
+    if (
+      ((operation.state === "failed" && operation.outcome === "definitively_rejected") ||
+        (operation.state === "cancelled" && operation.outcome === "cancelled")) &&
+      step?.status === "running"
+    ) {
+      operation.state = "reserved";
+      operation.outcome = null;
+      operation.actualCostCents = null;
+      operation.providerJobId = null;
+      operation.nextRetryAt = null;
+      operation.lastHttpStatus = null;
+      operation.lastSafeErrorCode = null;
+      operation.lastSafeErrorSummary = null;
+      operation.providerUsage = {};
+      operation.settledAt = null;
+      operation.reservationGeneration += 1;
+    }
+    if (operation.state === "succeeded" || operation.reservedCostCents > 0) return operation;
+    if (operation.estimatedCostCents > 0) {
+      await workflowStore.reserveCost({
+        workflowId: operation.workflowId,
+        stepId: operation.stepId,
+        amountCents: operation.estimatedCostCents,
+        idempotencyKey: `${operation.idempotencyKey}:reservation:${operation.reservationGeneration}`,
+        now
+      });
+      operation.reservedCostCents = operation.estimatedCostCents;
+    }
+    operation.updatedAt = now;
+    return operation;
+  }
+
+  async settleProviderOperation(
+    input: Parameters<ProviderResearchStore["settleProviderOperation"]>[0],
+    workflowStore: WorkflowStore
+  ) {
+    const operation = this.requireOperation(input.operationId);
+    const now = input.now ?? new Date().toISOString();
+    if (input.outcome === "succeeded") {
+      if (operation.state !== "succeeded" || operation.actualCostCents === null) {
+        throw new Error("Only a successful provider operation can be settled as successful.");
+      }
+      if (operation.reservedCostCents > 0) {
+        await workflowStore.recordActualCost({
+          workflowId: operation.workflowId,
+          stepId: operation.stepId,
+          attemptId: input.workflowAttemptId,
+          reservedCents: operation.reservedCostCents,
+          actualCents: operation.actualCostCents,
+          idempotencyKey: `${operation.idempotencyKey}:settlement:${operation.reservationGeneration}:actual`,
+          now
+        });
+      }
+      operation.reservedCostCents = 0;
+      operation.outcome = "succeeded";
+      operation.reconciliationRequired = false;
+      operation.nextRetryAt = null;
+      operation.lastSafeErrorCode = null;
+      operation.lastSafeErrorSummary = null;
+      operation.settledAt ??= now;
+      operation.updatedAt = now;
+      const completed = await workflowStore.completeStep({
+        workflowId: operation.workflowId,
+        stepKey: operation.operationKind,
+        owner: input.owner,
+        fencingToken: input.fencingToken,
+        outputReference: input.outputReference ?? `provider-operation:${operation.id}`,
+        now
+      });
+      if (!completed) throw new Error("Provider workflow settlement lost its lease.");
+      return operation;
+    }
+
+    const attemptState = input.outcome === "transient_retryable"
+      ? "retry_scheduled"
+      : input.outcome === "outcome_uncertain"
+        ? "outcome_unknown"
+        : input.outcome === "cancelled"
+          ? "cancelled"
+          : "failed";
+    if (input.providerAttemptId) {
+      this.finishAttemptIdempotently(input.providerAttemptId, operation.id, attemptState);
+    }
+
+    operation.lastHttpStatus = input.httpStatus;
+    operation.lastSafeErrorCode = input.safeCode;
+    operation.lastSafeErrorSummary = input.safeSummary;
+    operation.outcome = input.outcome;
+    operation.updatedAt = now;
+
+    if (input.outcome === "transient_retryable") {
+      operation.state = operation.providerJobId ? "submitted" : "retry_scheduled";
+      operation.nextRetryAt = input.retryAt;
+      await workflowStore.failStep({
+        workflowId: operation.workflowId,
+        stepKey: operation.operationKind,
+        owner: input.owner,
+        fencingToken: input.fencingToken,
+        classification: "transient",
+        safeCode: input.safeCode ?? "provider_temporarily_unavailable",
+        safeSummary: input.safeSummary ?? "Provider research is temporarily delayed.",
+        retryAt: input.retryAt ?? undefined,
+        now
+      });
+      return operation;
+    }
+
+    operation.nextRetryAt = null;
+    operation.reconciliationRequired = input.outcome === "outcome_uncertain";
+    operation.state = input.outcome === "outcome_uncertain"
+      ? "outcome_unknown"
+      : input.outcome === "cancelled"
+        ? "cancelled"
+        : "failed";
+    if (input.outcome !== "outcome_uncertain" && operation.reservedCostCents > 0) {
+      await workflowStore.releaseCost({
+        workflowId: operation.workflowId,
+        stepId: operation.stepId,
+        amountCents: operation.reservedCostCents,
+        idempotencyKey: `${operation.idempotencyKey}:settlement:${operation.reservationGeneration}:release`,
+        now
+      });
+      operation.reservedCostCents = 0;
+    }
+    operation.settledAt = input.outcome === "outcome_uncertain" ? null : now;
+    await workflowStore.failStep({
+      workflowId: operation.workflowId,
+      stepKey: operation.operationKind,
+      owner: input.owner,
+      fencingToken: input.fencingToken,
+      classification: input.outcome === "outcome_uncertain"
+        ? "configuration_error"
+        : input.outcome === "cancelled"
+          ? "cancelled"
+          : input.classification ?? "permanent",
+      safeCode: input.outcome === "outcome_uncertain"
+        ? "provider_outcome_unknown"
+        : input.safeCode ?? "provider_operation_failed",
+      safeSummary: input.outcome === "outcome_uncertain"
+        ? "A provider outcome requires administrator reconciliation."
+        : input.safeSummary ?? "Provider research could not continue.",
+      now
+    });
+    return operation;
+  }
+
+  async blockProviderConfiguration(
+    input: Parameters<ProviderResearchStore["blockProviderConfiguration"]>[0],
+    workflowStore: WorkflowStore
+  ) {
+    await workflowStore.failStep({
+      workflowId: input.workflowId,
+      stepKey: input.stepKey,
+      owner: input.owner,
+      fencingToken: input.fencingToken,
+      classification: "configuration_error",
+      safeCode: input.safeCode,
+      safeSummary: input.safeSummary,
+      now: input.now
+    });
+  }
+
+  async reconcileUncertainOperation(
+    input: Parameters<ProviderResearchStore["reconcileUncertainOperation"]>[0],
+    workflowStore?: WorkflowStore
+  ) {
+    const operation = this.requireOperation(input.operationId);
+    const now = input.now ?? new Date().toISOString();
+    if (!operation.reconciliationRequired) return operation;
+    if (!workflowStore) throw new Error("Workflow storage is required for reconciliation.");
+    if (input.resolution === "accepted_retryable") {
+      if (!operation.providerJobId) throw new Error("An accepted provider job identifier is required.");
+      operation.state = "submitted";
+      operation.outcome = "transient_retryable";
+      operation.reconciliationRequired = false;
+      operation.nextRetryAt = now;
+      await workflowStore.retryStep(
+        operation.workflowId,
+        operation.operationKind,
+        { actorId: input.actorId, authenticated: true },
+        now
+      );
+    } else if (input.resolution === "paid_cancelled") {
+      const actual = input.actualCostCents ?? operation.reservedCostCents;
+      if (actual < 0 || actual > operation.reservedCostCents) throw new Error("Invalid reconciled provider cost.");
+      if (operation.reservedCostCents > 0) {
+        await workflowStore.recordActualCost({
+          workflowId: operation.workflowId,
+          stepId: operation.stepId,
+          attemptId: null,
+          reservedCents: operation.reservedCostCents,
+          actualCents: actual,
+          idempotencyKey: `${operation.idempotencyKey}:reconciliation:${operation.reservationGeneration}:actual`,
+          now
+        });
+      }
+      operation.actualCostCents = actual;
+      operation.reservedCostCents = 0;
+      operation.state = "cancelled";
+      operation.outcome = "cancelled";
+      operation.reconciliationRequired = false;
+      operation.settledAt = now;
+    } else {
+      if (operation.reservedCostCents > 0) {
+        await workflowStore.releaseCost({
+          workflowId: operation.workflowId,
+          stepId: operation.stepId,
+          amountCents: operation.reservedCostCents,
+          idempotencyKey: `${operation.idempotencyKey}:reconciliation:${operation.reservationGeneration}:release`,
+          now
+        });
+      }
+      operation.reservedCostCents = 0;
+      operation.state = "failed";
+      operation.outcome = "definitively_rejected";
+      operation.reconciliationRequired = false;
+      operation.settledAt = now;
+    }
+    operation.updatedAt = now;
+    return operation;
   }
 
   async beginOperationAttempt(operationId: string, phase: "submit" | "poll" | "persist", now = new Date().toISOString()): Promise<ProviderAttemptLease> {
@@ -405,6 +644,19 @@ export class MemoryProviderResearchStore implements ProviderResearchStore {
   private finishAttempt(attemptId: string, operationId: string, state: MemoryAttempt["state"]) {
     const attempt = this.attempts.find((item) => item.id === attemptId && item.operationId === operationId);
     if (!attempt || attempt.state !== "started") throw new Error("Provider attempt fenced.");
+    attempt.state = state;
+    return attempt;
+  }
+
+  private finishAttemptIdempotently(
+    attemptId: string,
+    operationId: string,
+    state: MemoryAttempt["state"]
+  ) {
+    const attempt = this.attempts.find((item) => item.id === attemptId && item.operationId === operationId);
+    if (!attempt) throw new Error("Provider attempt fenced.");
+    if (attempt.state === state) return attempt;
+    if (attempt.state !== "started") throw new Error("Provider attempt fenced.");
     attempt.state = state;
     return attempt;
   }

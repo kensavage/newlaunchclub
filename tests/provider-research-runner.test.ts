@@ -91,6 +91,88 @@ describe("PR4 durable provider research runner", () => {
     expect(queries).toHaveBeenCalledOnce();
   });
 
+  it("blocks Firecrawl, paid calls, and reservations when OpenAI readiness is rejected", async () => {
+    const harness = await createHarness({ costs: { website: 20, profile: 25, query: 10 } });
+    const website = new MockWebsiteResearchProvider();
+    const analysis = new MockStructuredAnalysisProvider();
+    const submit = vi.spyOn(website, "submit");
+    const readiness = vi.spyOn(analysis, "checkReadiness").mockRejectedValueOnce(
+      new ProviderResearchError(
+        "configuration_error",
+        "provider_authentication_failed",
+        "The analysis provider requires administrator configuration.",
+        { httpStatus: 401, outcome: "definitively_rejected" }
+      )
+    );
+    const runner = createRunner(harness, providers({
+      website,
+      analysis,
+      costs: { website: 20, profile: 25, query: 10 }
+    }));
+
+    await expect(runner.runStep(harness.workflow.id, "website_research", "readiness-owner"))
+      .rejects.toMatchObject({
+        classification: "configuration_error",
+        safeCode: "provider_authentication_failed",
+        httpStatus: 401
+      });
+    expect(readiness).toHaveBeenCalledOnce();
+    expect(submit).not.toHaveBeenCalled();
+    expect(harness.researchStore.snapshot().operations).toHaveLength(0);
+    expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
+      .toMatchObject({ limitCents: 400, reservedCents: 0, spentCents: 0 });
+    expect((await harness.workflowStore.getWorkflow(harness.workflow.id))?.status).toBe("paused");
+    expect(harness.workflowStore.snapshot().steps.find((step) => step.stepKey === "website_research"))
+      .toMatchObject({ status: "failed_terminal" });
+  });
+
+  it("preserves Firecrawl spend and releases a later definitive OpenAI rejection", async () => {
+    const harness = await createHarness({ costs: { website: 20, profile: 25, query: 10 } });
+    const website = new MockWebsiteResearchProvider();
+    const analysis = new MockStructuredAnalysisProvider();
+    vi.spyOn(analysis, "extractCompanyProfile").mockRejectedValueOnce(
+      new ProviderResearchError(
+        "configuration_error",
+        "provider_authentication_failed",
+        "The analysis provider requires administrator configuration.",
+        { httpStatus: 401, outcome: "definitively_rejected" }
+      )
+    );
+    const runner = createRunner(harness, providers({
+      website,
+      analysis,
+      costs: { website: 20, profile: 25, query: 10 },
+      actualWebsiteCost: 5
+    }));
+
+    await expect(runner.runStep(harness.workflow.id, "website_research", "budget-website-owner"))
+      .resolves.toBe("succeeded");
+    await expect(runner.runStep(harness.workflow.id, "company_profile_extraction", "budget-profile-owner"))
+      .rejects.toMatchObject({ safeCode: "provider_authentication_failed" });
+
+    const detail = await harness.workflowStore.getWorkflowDetail(harness.workflow.id);
+    expect(detail?.workflow.status).toBe("paused");
+    expect(detail?.budget).toMatchObject({ limitCents: 400, reservedCents: 0, spentCents: 5 });
+    expect(400 - detail!.budget!.reservedCents - detail!.budget!.spentCents).toBe(395);
+    expect(harness.researchStore.snapshot().operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        operationKind: "website_research",
+        outcome: "succeeded",
+        actualCostCents: 5,
+        reservedCostCents: 0
+      }),
+      expect.objectContaining({
+        operationKind: "company_profile_extraction",
+        state: "failed",
+        outcome: "definitively_rejected",
+        reservedCostCents: 0
+      })
+    ]));
+    expect(harness.researchStore.snapshot().operations.some(
+      (operation) => operation.state === "retry_scheduled"
+    )).toBe(false);
+  });
+
   it("reuses a successful stored provider operation after a crash before workflow completion", async () => {
     const harness = await createHarness();
     const website = new MockWebsiteResearchProvider();
@@ -110,25 +192,23 @@ describe("PR4 durable provider research runner", () => {
       harness.workflow.id,
       "website_research",
       "crashing-owner"
-    )).rejects.toMatchObject({ safeCode: "provider_research_failed" });
+    )).resolves.toBe("succeeded");
     expect(harness.researchStore.snapshot().operations[0]).toMatchObject({ state: "succeeded" });
     expect(harness.workflowStore.snapshot().steps.find((step) => step.stepKey === "website_research"))
-      .toMatchObject({ status: "failed_terminal" });
+      .toMatchObject({ status: "succeeded" });
 
-    await new WorkflowAdministratorService(harness.workflowStore, actor)
-      .retryStep(harness.workflow.id, "website_research");
     const recoveryRunner = createRunner(harness, providers({ website }));
     await expect(recoveryRunner.runStep(
       harness.workflow.id,
       "website_research",
       "recovery-owner"
-    )).resolves.toBe("succeeded");
+    )).resolves.toBe("already_succeeded");
 
     expect(submit).toHaveBeenCalledOnce();
     expect(poll).toHaveBeenCalledOnce();
     expect(harness.researchStore.snapshot().pages).toHaveLength(2);
     expect(harness.workflowStore.snapshot().costs.filter((entry) => entry.entryType === "actual"))
-      .toHaveLength(1);
+      .toHaveLength(0);
   });
 
   it("makes duplicate queue delivery harmless across the complete PR4 continuation", async () => {
@@ -206,6 +286,8 @@ describe("PR4 durable provider research runner", () => {
       now: () => now
     });
     let pollCount = 0;
+    const analysis = new MockStructuredAnalysisProvider();
+    const readiness = vi.spyOn(analysis, "checkReadiness");
     const website: WebsiteResearchProvider = {
       provider: "firecrawl",
       submit: vi.fn(async () => ({
@@ -237,6 +319,7 @@ describe("PR4 durable provider research runner", () => {
     };
     const runner = createRunner(harness, providers({
       website,
+      analysis,
       costs: { website: 25, profile: 0, query: 0 },
       actualWebsiteCost: 7
     }), { now: () => now });
@@ -264,11 +347,17 @@ describe("PR4 durable provider research runner", () => {
       .resolves.toBe("succeeded");
     expect(website.submit).toHaveBeenCalledOnce();
     expect(website.poll).toHaveBeenCalledTimes(2);
+    expect(readiness).toHaveBeenCalledOnce();
     expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
       .toMatchObject({ limitCents: 400, reservedCents: 0, spentCents: 7 });
+    const historicalErrors = harness.workflowStore.snapshot().errors.filter(
+      (error) => error.safeCode === "provider_job_pending"
+    );
+    expect(historicalErrors).toHaveLength(1);
+    expect(historicalErrors[0]?.resolvedAt).toBe("2026-01-15T12:00:21.000Z");
   });
 
-  it("allows an administrator retry after corrected credentials under the same operation and reservation", async () => {
+  it("requires an administrator retry after corrected credentials and creates a fresh reservation", async () => {
     const harness = await createHarness({ costs: { website: 20, profile: 0, query: 0 } });
     let authenticated = false;
     const website: WebsiteResearchProvider = {
@@ -311,11 +400,13 @@ describe("PR4 durable provider research runner", () => {
         safeCode: "provider_authentication_failed"
       });
     expect(harness.researchStore.snapshot().operations[0]).toMatchObject({
-      state: "retry_scheduled",
-      providerJobId: null
+      state: "failed",
+      outcome: "definitively_rejected",
+      providerJobId: null,
+      reservedCostCents: 0
     });
     expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
-      .toMatchObject({ reservedCents: 20, spentCents: 0 });
+      .toMatchObject({ reservedCents: 0, spentCents: 0 });
 
     authenticated = true;
     await new WorkflowAdministratorService(harness.workflowStore, actor)
@@ -324,6 +415,7 @@ describe("PR4 durable provider research runner", () => {
       .resolves.toBe("succeeded");
     expect(website.submit).toHaveBeenCalledTimes(2);
     expect(harness.researchStore.snapshot().operations).toHaveLength(1);
+    expect(harness.researchStore.snapshot().operations[0]?.reservationGeneration).toBe(2);
     expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
       .toMatchObject({ reservedCents: 0, spentCents: 4 });
   });
@@ -353,7 +445,14 @@ describe("PR4 durable provider research runner", () => {
         classification: "configuration_error",
         safeCode: "provider_outcome_unknown"
       });
-    expect(harness.researchStore.snapshot().operations[0]).toMatchObject({ state: "outcome_unknown" });
+    expect(harness.researchStore.snapshot().operations[0]).toMatchObject({
+      state: "outcome_unknown",
+      outcome: "outcome_uncertain",
+      reconciliationRequired: true,
+      reservedCostCents: 20
+    });
+    expect((await harness.workflowStore.getWorkflowDetail(harness.workflow.id))?.budget)
+      .toMatchObject({ reservedCents: 20, spentCents: 0 });
 
     await new WorkflowAdministratorService(harness.workflowStore, actor)
       .retryStep(harness.workflow.id, "website_research");
@@ -430,7 +529,7 @@ describe("PR4 durable provider research runner", () => {
       "configuration-owner"
     )).rejects.toMatchObject({ safeCode: "provider_research_configuration" });
     expect((await missingConfiguration.workflowStore.getWorkflow(missingConfiguration.workflow.id))?.status)
-      .toBe("failed");
+      .toBe("paused");
     expect((await missingConfiguration.workflowStore.getPublicProgress(missingConfiguration.reportRequestId))?.steps[1])
       .toMatchObject({ label: "Reviewing your website", status: "failed" });
   });

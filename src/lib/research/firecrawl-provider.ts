@@ -89,7 +89,7 @@ export class FirecrawlWebsiteResearchProvider implements WebsiteResearchProvider
       fetchImplementation: this.options.fetchImplementation
     });
 
-    const parsed = parseProviderValue(submissionSchema, value);
+    const parsed = parseProviderValue(submissionSchema, value, "outcome_uncertain");
     return {
       provider: this.provider,
       jobId: parsed.id,
@@ -105,7 +105,8 @@ export class FirecrawlWebsiteResearchProvider implements WebsiteResearchProvider
       throw new ProviderResearchError(
         "permanent",
         "provider_job_id_invalid",
-        "The stored provider job identifier is invalid."
+        "The stored provider job identifier is invalid.",
+        { outcome: "outcome_uncertain" }
       );
     }
     const expectedUrl = assertPublicHttpUrl(input.expectedUrl);
@@ -117,7 +118,7 @@ export class FirecrawlWebsiteResearchProvider implements WebsiteResearchProvider
       phase: "poll",
       fetchImplementation: this.options.fetchImplementation
     });
-    let parsed = parseProviderValue(statusSchema, value);
+    let parsed = parseProviderValue(statusSchema, value, "transient_retryable");
     let creditsUsed = parsed.creditsUsed;
     const providerCreatedAt = parsed.createdAt ?? null;
     let providerCompletedAt = parsed.completedAt ?? null;
@@ -135,7 +136,7 @@ export class FirecrawlWebsiteResearchProvider implements WebsiteResearchProvider
         "cancelled",
         "provider_job_cancelled",
         "The website research job was cancelled.",
-        { httpStatus: response.status }
+        { httpStatus: response.status, outcome: "outcome_uncertain" }
       );
     }
     if (parsed.status === "failed") {
@@ -143,7 +144,7 @@ export class FirecrawlWebsiteResearchProvider implements WebsiteResearchProvider
         "permanent",
         "provider_job_failed",
         "The website research provider could not complete this site.",
-        { httpStatus: response.status }
+        { httpStatus: response.status, outcome: "outcome_uncertain" }
       );
     }
 
@@ -156,7 +157,8 @@ export class FirecrawlWebsiteResearchProvider implements WebsiteResearchProvider
         throw new ProviderResearchError(
           "permanent",
           "provider_response_invalid",
-          "The website research provider returned an invalid pagination response."
+          "The website research provider returned an invalid pagination response.",
+          { outcome: "outcome_uncertain" }
         );
       }
       seenPaginationUrls.add(paginationUrl);
@@ -168,7 +170,7 @@ export class FirecrawlWebsiteResearchProvider implements WebsiteResearchProvider
         phase: "poll",
         fetchImplementation: this.options.fetchImplementation
       });
-      parsed = parseProviderValue(statusSchema, next.value);
+      parsed = parseProviderValue(statusSchema, next.value, "transient_retryable");
       if (parsed.status !== "completed") {
         throw new ProviderResearchError(
           "transient",
@@ -228,7 +230,8 @@ export class FirecrawlWebsiteResearchProvider implements WebsiteResearchProvider
       throw new ProviderResearchError(
         "permanent",
         "website_content_unavailable",
-        "The website research provider did not return readable public pages."
+        "The website research provider did not return readable public pages.",
+        { outcome: "outcome_uncertain" }
       );
     }
 
@@ -250,19 +253,25 @@ function assertFirecrawlPaginationUrl(value: string, jobId: string) {
     throw new ProviderResearchError(
       "permanent",
       "provider_response_invalid",
-      "The website research provider returned an invalid pagination URL."
+      "The website research provider returned an invalid pagination URL.",
+      { outcome: "outcome_uncertain" }
     );
   }
   return url.toString();
 }
 
-function parseProviderValue<T>(schema: z.ZodType<T>, value: unknown) {
+function parseProviderValue<T>(
+  schema: z.ZodType<T>,
+  value: unknown,
+  outcome: "transient_retryable" | "outcome_uncertain"
+) {
   const result = schema.safeParse(value);
   if (!result.success) {
     throw new ProviderResearchError(
-      "permanent",
+      outcome === "transient_retryable" ? "transient" : "configuration_error",
       "provider_response_invalid",
-      "The website research provider returned an invalid response."
+      "The website research provider returned an invalid response.",
+      { outcome, retryAfterSeconds: outcome === "transient_retryable" ? 10 : undefined }
     );
   }
   return result.data;

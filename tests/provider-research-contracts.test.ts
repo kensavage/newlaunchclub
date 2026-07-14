@@ -109,6 +109,7 @@ describe("PR4 provider contracts and selection", () => {
       domain: "example.com",
       pages: syntheticEvidencePages()
     });
+    await providers.analysis.checkReadiness();
     expect(firstProfile).toEqual(secondProfile);
     expect(providers.mockMode).toBe(true);
     expect(providers.costPolicy.websiteReservationCents).toBe(0);

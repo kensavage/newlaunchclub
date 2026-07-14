@@ -62,6 +62,14 @@ The scheduled function only wakes the Background Function and performs no workfl
 
 Money is stored as integer cents. Initial reports receive a 400-cent limit and future weekly refreshes receive a 100-cent limit. Paid work must reserve its maximum cost transactionally, record actual cost idempotently, and release the unused reservation. PR3 makes no paid calls.
 
+### PR4 Provider Settlement
+
+PR4 adds `website_research`, `company_profile_extraction`, and `search_query_discovery`, then stops at `ready_for_search_intelligence`. It still does not synthesize a report or send email. Live mode retrieves `OPENAI_MODEL_FAST` with the same OpenAI client and authorization path used by Responses before the first Firecrawl operation is created. This readiness request performs no inference and reserves no cost. Mock mode skips it and makes no provider network calls.
+
+Provider attempts have one explicit outcome: `succeeded`, `definitively_rejected`, `transient_retryable`, `outcome_uncertain`, or `cancelled`. Migration `0006_v3_provider_failure_settlement.sql` settles the provider operation, attempt, workflow step, workflow status, workflow errors, and report budget in service-role-only transactions. Successful paid work records actual cost once and releases unused reservation. A definitive rejection releases the complete reservation and cannot retry automatically. Transient failures retain a coherent reservation for the same operation. Uncertain outcomes retain their reservation, require reconciliation, and cannot be retried blindly. Cancellation preserves spent cost and retains only reservations whose paid outcome is still uncertain.
+
+Reservation generations make an explicitly approved retry auditable without changing the stable operation identity. Settlement and administrator reconciliation are idempotent. Successful settlement resolves earlier active transient errors while retaining their historical rows. Browser roles receive no access to the settlement or reconciliation functions.
+
 ## Public Progress
 
 PR3 displays only `Request received` and `Preparing research`, with no percentage. It does not expose internal states, IDs, provider errors, stack traces, attempts, queue reads, leases, administrator notes, or costs. Later research stages remain absent until PR4 performs real research.
@@ -69,6 +77,8 @@ PR3 displays only `Request received` and `Preparing research`, with no percentag
 ## Administrator Recovery
 
 The existing `npm run research:admin` CLI continues to support `list`, `show`, `retry`, `retry-step`, `pause`, `resume`, `cancel`, and `release-expired-lease`. `WORKFLOW_ADMIN_SECRET` is required. State transitions, audit logging, dead-letter retry state, and replacement queue insertion commit together. Cancellation still requires interactive confirmation unless `--yes` is supplied.
+
+PR4 adds `reconcile-provider OPERATION_ID RESOLUTION [--actual-cents N] [--yes]`, where `RESOLUTION` is `definitively_rejected`, `accepted_retryable`, or `paid_cancelled`. The command requires administrator authentication and interactive confirmation unless `--yes` is supplied. Every decision is appended to the immutable provider reconciliation ledger. `definitively_rejected` releases the reservation, `accepted_retryable` resumes polling the stored provider job without a new submission, and `paid_cancelled` settles the supplied actual cost before releasing the remainder. Only `paid_cancelled` accepts `--actual-cents`.
 
 ## Local Testing
 

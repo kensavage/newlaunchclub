@@ -21,7 +21,8 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       "0002_v3_identity_intake_access.sql",
       "0003_v3_durable_workflow.sql",
       "0004_v3_supabase_queue.sql",
-      "0005_v3_provider_research_evidence.sql"
+      "0005_v3_provider_research_evidence.sql",
+      "0006_v3_provider_failure_settlement.sql"
     ]) {
       let sql = await readFile(path.join(process.cwd(), "supabase/migrations", name), "utf8");
       if (name.startsWith("0001")) sql = sql.replace("create extension if not exists pgcrypto;", "");
@@ -184,7 +185,7 @@ describe("V3 isolated PostgreSQL migration stack", () => {
               'company_profile_versions', 'company_profile_claims',
               'company_profile_claim_evidence', 'company_profile_entities',
               'company_profile_entity_evidence', 'search_query_sets', 'search_queries',
-              'search_query_claim_evidence'
+              'search_query_claim_evidence', 'provider_operation_reconciliations'
             ) and c.relrowsecurity) rls_tables,
           (select count(*)::integer from information_schema.role_table_grants
             where grantee in ('anon', 'authenticated') and table_schema = 'public'
@@ -196,7 +197,7 @@ describe("V3 isolated PostgreSQL migration stack", () => {
         total_steps: 8,
         status: "dispatch_pending",
         queued: 2,
-        rls_tables: 14,
+        rls_tables: 15,
         browser_grants: 0
       });
 
@@ -216,7 +217,13 @@ describe("V3 isolated PostgreSQL migration stack", () => {
 
       await db.exec("savepoint browser_denial");
       await db.exec("set local role anon");
+      await db.exec("savepoint browser_table_denial");
       await expect(db.query("select * from public.research_artifacts")).rejects.toThrow(/permission denied/i);
+      await db.exec("rollback to savepoint browser_table_denial; release savepoint browser_table_denial");
+      await db.exec("savepoint browser_rpc_denial");
+      await expect(db.query(`select reserve_v3_provider_operation_cost(gen_random_uuid(), now())`))
+        .rejects.toThrow(/permission denied/i);
+      await db.exec("rollback to savepoint browser_rpc_denial; release savepoint browser_rpc_denial");
       await db.exec("rollback to savepoint browser_denial; release savepoint browser_denial; reset role");
     } finally {
       await db.exec("rollback");
@@ -454,6 +461,365 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       await db.exec("rollback");
     }
   });
+
+  it("atomically retries Firecrawl, resolves stale errors on success, and settles cost once", async () => {
+    await db.exec("begin");
+    try {
+      const context = await setupProviderWorkflow(db, "settlement-success.example", "t");
+      const first = await beginLeasedProviderOperation(db, {
+        workflowId: context.workflowId,
+        kind: "website_research",
+        provider: "firecrawl",
+        owner: "firecrawl-first",
+        suffix: "settlement-success",
+        cost: 20
+      });
+      await db.query(settleProviderSql({
+        ...first,
+        outcome: "transient_retryable",
+        classification: "transient",
+        safeCode: "provider_job_pending",
+        safeSummary: "Website research is still running.",
+        retryAt: "now() + interval '1 second'"
+      }));
+      const delayed = await db.query<{
+        operation_state: string;
+        outcome_class: string;
+        reserved_cost_cents: number;
+        step_status: string;
+        workflow_status: string;
+        open_errors: number;
+      }>(`
+        select po.operation_state, po.outcome_class, po.reserved_cost_cents,
+          rs.status step_status, rw.status workflow_status,
+          (select count(*)::integer from workflow_errors
+            where workflow_id = rw.id and resolved_at is null) open_errors
+        from provider_operations po
+        join research_steps rs on rs.id = po.step_id
+        join research_workflows rw on rw.id = po.workflow_id
+        where po.id = '${first.operationId}'
+      `);
+      expect(delayed.rows[0]).toEqual({
+        operation_state: "submitted",
+        outcome_class: "transient_retryable",
+        reserved_cost_cents: 20,
+        step_status: "retry_scheduled",
+        workflow_status: "waiting_retry",
+        open_errors: 1
+      });
+
+      await db.query(`select admin_transition_research_workflow(
+        '${context.workflowId}', 'retry_step', 'website_research', 'test-admin', now()
+      )`);
+      const secondLease = await beginWorkflowStep(
+        db,
+        context.workflowId,
+        "website_research",
+        "firecrawl-second"
+      );
+      const secondPoll = await db.query<{ attempt: { attemptId: string } }>(`
+        select begin_provider_operation_attempt('${first.operationId}', 'poll', now()) attempt
+      `);
+      const content = "Settlement success evidence for a completed Firecrawl job.";
+      await db.query(storeWebsitePageSql({ operationId: first.operationId, content }));
+      await db.query(`select complete_website_research_operation(
+        '${first.operationId}', '${secondPoll.rows[0]!.attempt.attemptId}', 200,
+        '{"creditsUsed":5}'::jsonb, 5, now(), now()
+      )`);
+      const successSql = settleProviderSql({
+        operationId: first.operationId,
+        providerAttemptId: null,
+        workflowAttemptId: secondLease.workflowAttemptId,
+        owner: "firecrawl-second",
+        fencingToken: secondLease.fencingToken,
+        outcome: "succeeded",
+        classification: null,
+        safeCode: null,
+        safeSummary: null,
+        retryAt: "null",
+        outputReference: "provider-operation:website"
+      });
+      await db.query(successSql);
+      await db.query(successSql);
+
+      const settled = await db.query<{
+        operation_state: string;
+        outcome_class: string;
+        reserved_cost_cents: number;
+        reserved: number;
+        spent: number;
+        available: number;
+        historical_errors: number;
+        open_errors: number;
+        actual_entries: number;
+        snapshots: number;
+      }>(`
+        select po.operation_state, po.outcome_class, po.reserved_cost_cents,
+          b.reserved_cents reserved, b.spent_cents spent,
+          b.limit_cents - b.reserved_cents - b.spent_cents available,
+          (select count(*)::integer from workflow_errors
+            where workflow_id = po.workflow_id and safe_code = 'provider_job_pending') historical_errors,
+          (select count(*)::integer from workflow_errors
+            where workflow_id = po.workflow_id and resolved_at is null) open_errors,
+          (select count(*)::integer from report_cost_entries
+            where workflow_id = po.workflow_id and entry_type = 'actual') actual_entries,
+          (select count(*)::integer from source_snapshots
+            where provider_operation_id = po.id) snapshots
+        from provider_operations po
+        join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${first.operationId}'
+      `);
+      expect(settled.rows[0]).toEqual({
+        operation_state: "succeeded",
+        outcome_class: "succeeded",
+        reserved_cost_cents: 0,
+        reserved: 0,
+        spent: 5,
+        available: 395,
+        historical_errors: 1,
+        open_errors: 0,
+        actual_entries: 1,
+        snapshots: 1
+      });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("releases a definitive OpenAI rejection while preserving earlier Firecrawl spend", async () => {
+    await db.exec("begin");
+    try {
+      const context = await setupProviderWorkflow(db, "settlement-rejection.example", "u");
+      await completeAndSettleWebsite(db, context.workflowId, "rejection-source", 20, 5);
+      const profile = await beginLeasedProviderOperation(db, {
+        workflowId: context.workflowId,
+        kind: "company_profile_extraction",
+        provider: "openai",
+        owner: "openai-rejected",
+        suffix: "rejected-profile",
+        cost: 25
+      });
+      await db.query(settleProviderSql({
+        ...profile,
+        outcome: "definitively_rejected",
+        classification: "configuration_error",
+        safeCode: "provider_authentication_failed",
+        safeSummary: "The analysis provider requires administrator configuration.",
+        retryAt: "null"
+      }));
+      const state = await db.query<{
+        operation_state: string;
+        outcome_class: string;
+        reserved_cost_cents: number;
+        workflow_status: string;
+        step_status: string;
+        reserved: number;
+        spent: number;
+        available: number;
+        retries: number;
+      }>(`
+        select po.operation_state, po.outcome_class, po.reserved_cost_cents,
+          rw.status workflow_status, rs.status step_status,
+          b.reserved_cents reserved, b.spent_cents spent,
+          b.limit_cents - b.reserved_cents - b.spent_cents available,
+          (select count(*)::integer from provider_operations
+            where workflow_id = rw.id and operation_state = 'retry_scheduled') retries
+        from provider_operations po
+        join research_workflows rw on rw.id = po.workflow_id
+        join research_steps rs on rs.id = po.step_id
+        join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${profile.operationId}'
+      `);
+      expect(state.rows[0]).toEqual({
+        operation_state: "failed",
+        outcome_class: "definitively_rejected",
+        reserved_cost_cents: 0,
+        workflow_status: "paused",
+        step_status: "failed_terminal",
+        reserved: 0,
+        spent: 5,
+        available: 395,
+        retries: 0
+      });
+
+      await db.query(`select admin_transition_research_workflow(
+        '${context.workflowId}', 'retry_step', 'company_profile_extraction', 'test-admin', now()
+      )`);
+      await beginWorkflowStep(db, context.workflowId, "company_profile_extraction", "openai-corrected");
+      await db.query(`select reserve_v3_provider_operation_cost('${profile.operationId}', now())`);
+      const retried = await db.query<{ generation: number; reserved: number }>(`
+        select po.reservation_generation generation, b.reserved_cents reserved
+        from provider_operations po join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${profile.operationId}'
+      `);
+      expect(retried.rows[0]).toEqual({ generation: 2, reserved: 25 });
+
+      await db.query(`select admin_transition_research_workflow(
+        '${context.workflowId}', 'cancel', null, 'test-admin', now()
+      )`);
+      const cancelled = await db.query<{ state: string; reserved: number; spent: number }>(`
+        select po.operation_state state, b.reserved_cents reserved, b.spent_cents spent
+        from provider_operations po join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${profile.operationId}'
+      `);
+      expect(cancelled.rows[0]).toEqual({ state: "cancelled", reserved: 0, spent: 5 });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("retains uncertain reservations until one idempotent administrator reconciliation", async () => {
+    await db.exec("begin");
+    try {
+      const context = await setupProviderWorkflow(db, "settlement-uncertain.example", "v");
+      const uncertain = await beginLeasedProviderOperation(db, {
+        workflowId: context.workflowId,
+        kind: "website_research",
+        provider: "firecrawl",
+        owner: "uncertain-owner",
+        suffix: "uncertain-submit",
+        cost: 20
+      });
+      await db.query(settleProviderSql({
+        ...uncertain,
+        outcome: "outcome_uncertain",
+        classification: "configuration_error",
+        safeCode: "provider_timeout",
+        safeSummary: "The provider submission outcome is unknown.",
+        retryAt: "null"
+      }));
+      const quarantined = await db.query<{
+        state: string;
+        reconciliation_required: boolean;
+        reserved: number;
+        workflow_status: string;
+      }>(`
+        select po.operation_state state, po.reconciliation_required,
+          b.reserved_cents reserved, rw.status workflow_status
+        from provider_operations po
+        join report_cost_budgets b on b.workflow_id = po.workflow_id
+        join research_workflows rw on rw.id = po.workflow_id
+        where po.id = '${uncertain.operationId}'
+      `);
+      expect(quarantined.rows[0]).toEqual({
+        state: "outcome_unknown",
+        reconciliation_required: true,
+        reserved: 20,
+        workflow_status: "paused"
+      });
+      await expectSqlFailure(db, "uncertain_retry", () => db.query(`
+        select admin_transition_research_workflow(
+          '${context.workflowId}', 'retry_step', 'website_research', 'test-admin', now()
+        )
+      `), /provider_reconciliation_required/);
+
+      await expectSqlFailure(db, "reconciliation_cost_scope", () => db.query(`
+        select admin_reconcile_v3_provider_operation(
+          '${uncertain.operationId}', 'definitively_rejected', 1, 'test-admin', now()
+        )
+      `), /provider_reconciled_cost_invalid/);
+      const reconcileSql = `select admin_reconcile_v3_provider_operation(
+        '${uncertain.operationId}', 'definitively_rejected', null, 'test-admin', now()
+      )`;
+      await db.query(reconcileSql);
+      await db.query(reconcileSql);
+      const reconciled = await db.query<{
+        state: string;
+        reconciliation_required: boolean;
+        reserved: number;
+        reconciliations: number;
+        historical_errors: number;
+        open_errors: number;
+      }>(`
+        select po.operation_state state, po.reconciliation_required,
+          b.reserved_cents reserved,
+          (select count(*)::integer from provider_operation_reconciliations
+            where provider_operation_id = po.id) reconciliations,
+          (select count(*)::integer from workflow_errors
+            where workflow_id = po.workflow_id and safe_code = 'provider_outcome_unknown') historical_errors,
+          (select count(*)::integer from workflow_errors
+            where workflow_id = po.workflow_id and safe_code = 'provider_outcome_unknown'
+              and resolved_at is null) open_errors
+        from provider_operations po
+        join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${uncertain.operationId}'
+      `);
+      expect(reconciled.rows[0]).toEqual({
+        state: "failed",
+        reconciliation_required: false,
+        reserved: 0,
+        reconciliations: 1,
+        historical_errors: 1,
+        open_errors: 0
+      });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("preserves a possibly paid cancellation until actual spend is reconciled", async () => {
+    await db.exec("begin");
+    try {
+      const context = await setupProviderWorkflow(db, "settlement-cancel.example", "w");
+      const submitted = await beginLeasedProviderOperation(db, {
+        workflowId: context.workflowId,
+        kind: "website_research",
+        provider: "firecrawl",
+        owner: "cancel-owner",
+        suffix: "cancel-submitted",
+        cost: 20
+      });
+      await db.query(`select admin_transition_research_workflow(
+        '${context.workflowId}', 'cancel', null, 'test-admin', now()
+      )`);
+      const held = await db.query<{
+        state: string;
+        reconciliation_required: boolean;
+        reserved: number;
+        spent: number;
+      }>(`
+        select po.operation_state state, po.reconciliation_required,
+          b.reserved_cents reserved, b.spent_cents spent
+        from provider_operations po join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${submitted.operationId}'
+      `);
+      expect(held.rows[0]).toEqual({
+        state: "outcome_unknown",
+        reconciliation_required: true,
+        reserved: 20,
+        spent: 0
+      });
+
+      const reconciliation = `select admin_reconcile_v3_provider_operation(
+        '${submitted.operationId}', 'paid_cancelled', 5, 'test-admin', now()
+      )`;
+      await db.query(reconciliation);
+      await db.query(reconciliation);
+      const final = await db.query<{
+        state: string;
+        reserved: number;
+        spent: number;
+        available: number;
+        reconciliations: number;
+      }>(`
+        select po.operation_state state, b.reserved_cents reserved, b.spent_cents spent,
+          b.limit_cents - b.reserved_cents - b.spent_cents available,
+          (select count(*)::integer from provider_operation_reconciliations
+            where provider_operation_id = po.id) reconciliations
+        from provider_operations po join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${submitted.operationId}'
+      `);
+      expect(final.rows[0]).toEqual({
+        state: "cancelled",
+        reserved: 0,
+        spent: 5,
+        available: 395,
+        reconciliations: 1
+      });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
 });
 
 function intakeSql(domain = "example.com", seed = "a") {
@@ -570,6 +936,127 @@ function ensureOperationSql(input: {
     'provider-test:${input.workflowId}:${input.kind}:${input.suffix}',
     '${fingerprint}', ${input.cost}, 12, '${SYNTHETIC_RESEARCH_TIME}'
   ) operation`;
+}
+
+async function beginWorkflowStep(
+  db: PGlite,
+  workflowId: string,
+  kind: "website_research" | "company_profile_extraction" | "search_query_discovery",
+  owner: string
+) {
+  const result = await db.query<{
+    payload: { disposition: string; attemptId: string; lease: { fencingToken: number } };
+  }>(`select begin_research_step(
+    '${workflowId}', '${kind}', ${sqlLiteral(owner)}, 120, now()
+  ) payload`);
+  expect(result.rows[0]?.payload.disposition).toBe("acquired");
+  return {
+    workflowAttemptId: result.rows[0]!.payload.attemptId,
+    fencingToken: result.rows[0]!.payload.lease.fencingToken
+  };
+}
+
+async function beginLeasedProviderOperation(
+  db: PGlite,
+  input: {
+    workflowId: string;
+    kind: "website_research" | "company_profile_extraction" | "search_query_discovery";
+    provider: "firecrawl" | "openai" | "mock";
+    owner: string;
+    suffix: string;
+    cost: number;
+  }
+) {
+  const lease = await beginWorkflowStep(db, input.workflowId, input.kind, input.owner);
+  const ensured = await db.query<{ operation: { id: string } }>(ensureOperationSql({
+    workflowId: input.workflowId,
+    kind: input.kind,
+    provider: input.provider,
+    suffix: input.suffix,
+    cost: input.cost
+  }));
+  const operationId = ensured.rows[0]!.operation.id;
+  await db.query(`select reserve_v3_provider_operation_cost('${operationId}', now())`);
+  const submit = await db.query<{ attempt: { attemptId: string } }>(`
+    select begin_provider_operation_attempt('${operationId}', 'submit', now()) attempt
+  `);
+  let providerAttemptId = submit.rows[0]!.attempt.attemptId;
+  if (input.kind === "website_research") {
+    await db.query(`select record_provider_job(
+      '${operationId}', '${providerAttemptId}', 'job-${input.suffix}', 200,
+      '{}'::jsonb, now(), now()
+    )`);
+    const poll = await db.query<{ attempt: { attemptId: string } }>(`
+      select begin_provider_operation_attempt('${operationId}', 'poll', now()) attempt
+    `);
+    providerAttemptId = poll.rows[0]!.attempt.attemptId;
+  }
+  return {
+    operationId,
+    providerAttemptId,
+    workflowAttemptId: lease.workflowAttemptId,
+    owner: input.owner,
+    fencingToken: lease.fencingToken,
+    outputReference: `provider-operation:${operationId}`
+  };
+}
+
+function settleProviderSql(input: {
+  operationId: string;
+  providerAttemptId: string | null;
+  workflowAttemptId: string;
+  owner: string;
+  fencingToken: number;
+  outcome: "succeeded" | "definitively_rejected" | "transient_retryable" | "outcome_uncertain" | "cancelled";
+  classification: string | null;
+  safeCode: string | null;
+  safeSummary: string | null;
+  retryAt: string;
+  outputReference?: string | null;
+}) {
+  return `select settle_v3_provider_operation(
+    '${input.operationId}', ${input.providerAttemptId ? `'${input.providerAttemptId}'` : "null"},
+    '${input.workflowAttemptId}', ${sqlLiteral(input.owner)}, ${input.fencingToken},
+    '${input.outcome}', ${input.classification ? sqlLiteral(input.classification) : "null"},
+    null, ${input.safeCode ? sqlLiteral(input.safeCode) : "null"},
+    ${input.safeSummary ? sqlLiteral(input.safeSummary) : "null"},
+    ${input.retryAt}, ${input.outputReference ? sqlLiteral(input.outputReference) : "null"}, now()
+  )`;
+}
+
+async function completeAndSettleWebsite(
+  db: PGlite,
+  workflowId: string,
+  suffix: string,
+  reservedCostCents: number,
+  actualCostCents: number
+) {
+  const operation = await beginLeasedProviderOperation(db, {
+    workflowId,
+    kind: "website_research",
+    provider: "firecrawl",
+    owner: `website-${suffix}`,
+    suffix,
+    cost: reservedCostCents
+  });
+  await db.query(storeWebsitePageSql({
+    operationId: operation.operationId,
+    content: `Website evidence for ${suffix}.`
+  }));
+  await db.query(`select complete_website_research_operation(
+    '${operation.operationId}', '${operation.providerAttemptId}', 200,
+    '{"creditsUsed":5}'::jsonb, ${actualCostCents}, now(), now()
+  )`);
+  await db.query(settleProviderSql({
+    ...operation,
+    providerAttemptId: null,
+    outcome: "succeeded",
+    classification: null,
+    safeCode: null,
+    safeSummary: null,
+    retryAt: "null"
+  }));
+  return operation;
 }
 
 async function beginWebsiteOperation(

@@ -248,6 +248,7 @@ export interface StructuredAnalysisResult<T> {
 
 export interface StructuredAnalysisProvider {
   readonly provider: "openai" | "mock";
+  checkReadiness(): Promise<void>;
   extractCompanyProfile(input: {
     normalizedUrl: string;
     domain: string;
@@ -296,6 +297,13 @@ export type ProviderOperationKind =
   | "company_profile_extraction"
   | "search_query_discovery";
 
+export type ProviderOutcome =
+  | "succeeded"
+  | "definitively_rejected"
+  | "transient_retryable"
+  | "outcome_uncertain"
+  | "cancelled";
+
 export interface ProviderOperationRecord {
   id: string;
   workflowId: string;
@@ -319,7 +327,12 @@ export interface ProviderOperationRecord {
   maximumAttempts: number;
   nextRetryAt: string | null;
   estimatedCostCents: number;
+  reservedCostCents: number;
   actualCostCents: number | null;
+  outcome: ProviderOutcome | null;
+  reconciliationRequired: boolean;
+  reservationGeneration: number;
+  settledAt: string | null;
   providerUsage: ProviderUsage;
   lastHttpStatus: number | null;
   lastSafeErrorCode: string | null;
@@ -339,6 +352,8 @@ export class ProviderResearchError extends Error {
       retryAfterSeconds?: number;
       httpStatus?: number | null;
       outcomeUncertain?: boolean;
+      outcome?: Exclude<ProviderOutcome, "succeeded">;
+      workflowSettled?: boolean;
       cause?: unknown;
     } = {}
   ) {
@@ -346,12 +361,29 @@ export class ProviderResearchError extends Error {
     this.name = "ProviderResearchError";
     this.retryAfterSeconds = options.retryAfterSeconds ?? null;
     this.httpStatus = options.httpStatus ?? null;
-    this.outcomeUncertain = options.outcomeUncertain ?? false;
+    this.outcome = options.outcome ?? defaultFailureOutcome(
+      classification,
+      options.outcomeUncertain ?? false
+    );
+    this.outcomeUncertain = this.outcome === "outcome_uncertain";
+    this.workflowSettled = options.workflowSettled ?? false;
   }
 
   readonly retryAfterSeconds: number | null;
   readonly httpStatus: number | null;
   readonly outcomeUncertain: boolean;
+  readonly outcome: Exclude<ProviderOutcome, "succeeded">;
+  readonly workflowSettled: boolean;
+}
+
+function defaultFailureOutcome(
+  classification: FailureClassification,
+  outcomeUncertain: boolean
+): Exclude<ProviderOutcome, "succeeded"> {
+  if (outcomeUncertain) return "outcome_uncertain";
+  if (classification === "transient") return "transient_retryable";
+  if (classification === "cancelled") return "cancelled";
+  return "definitively_rejected";
 }
 
 export function normalizeDiscoveredQueries(

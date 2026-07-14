@@ -31,7 +31,7 @@ export async function requestProviderJson(input: {
         providerHost
       });
     }
-    const value = parseJson(text);
+    const value = parseJson(text, input.phase);
     return { value, response };
   } catch (error) {
     if (error instanceof ProviderResearchError) throw error;
@@ -44,7 +44,7 @@ export async function requestProviderJson(input: {
         : "The provider connection was temporarily unavailable.",
       {
         retryAfterSeconds: 10,
-        outcomeUncertain: input.phase === "submit",
+        outcome: input.phase === "submit" ? "outcome_uncertain" : "transient_retryable",
         cause: error
       }
     );
@@ -59,12 +59,16 @@ function mapHttpFailure(input: {
   phase: "submit" | "poll";
   providerHost: string;
 }) {
+  const priorPaidAcceptancePossible = input.phase === "poll";
   if (input.status === 401 || input.status === 403) {
     return new ProviderResearchError(
       "configuration_error",
       "provider_authentication_failed",
       "The research provider requires administrator configuration.",
-      { httpStatus: input.status }
+      {
+        httpStatus: input.status,
+        outcome: priorPaidAcceptancePossible ? "outcome_uncertain" : "definitively_rejected"
+      }
     );
   }
   if (input.status === 402) {
@@ -72,7 +76,10 @@ function mapHttpFailure(input: {
       "budget_blocked",
       "provider_credits_unavailable",
       "The research provider has no available credits.",
-      { httpStatus: input.status }
+      {
+        httpStatus: input.status,
+        outcome: priorPaidAcceptancePossible ? "outcome_uncertain" : "definitively_rejected"
+      }
     );
   }
   if (RETRYABLE_STATUS.has(input.status)) {
@@ -86,7 +93,7 @@ function mapHttpFailure(input: {
       {
         retryAfterSeconds: input.retryAfterSeconds ?? 10,
         httpStatus: input.status,
-        outcomeUncertain
+        outcome: outcomeUncertain ? "outcome_uncertain" : "transient_retryable"
       }
     );
   }
@@ -94,19 +101,26 @@ function mapHttpFailure(input: {
     "permanent",
     "provider_request_rejected",
     `The ${input.providerHost} research request could not be accepted.`,
-    { httpStatus: input.status }
+    {
+      httpStatus: input.status,
+      outcome: priorPaidAcceptancePossible ? "outcome_uncertain" : "definitively_rejected"
+    }
   );
 }
 
-function parseJson(text: string): unknown {
+function parseJson(text: string, phase: "submit" | "poll"): unknown {
   try {
     return text ? JSON.parse(text) : {};
   } catch (error) {
     throw new ProviderResearchError(
-      "permanent",
+      phase === "submit" ? "configuration_error" : "transient",
       "provider_response_invalid",
       "The research provider returned an invalid response.",
-      { cause: error }
+      {
+        outcome: phase === "submit" ? "outcome_uncertain" : "transient_retryable",
+        retryAfterSeconds: phase === "poll" ? 10 : undefined,
+        cause: error
+      }
     );
   }
 }

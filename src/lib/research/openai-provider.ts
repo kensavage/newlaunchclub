@@ -32,11 +32,28 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
     });
   }
 
+  async checkReadiness() {
+    try {
+      const model = await this.client.models.retrieve(this.model);
+      if (!model.id) {
+        throw new ProviderResearchError(
+          "configuration_error",
+          "provider_model_unavailable",
+          "The configured analysis model is unavailable.",
+          { outcome: "definitively_rejected" }
+        );
+      }
+    } catch (error) {
+      throw mapOpenAiReadinessFailure(error);
+    }
+  }
+
   async extractCompanyProfile(input: {
     normalizedUrl: string;
     domain: string;
     pages: WebsiteEvidencePage[];
   }) {
+    let providerAccepted = false;
     try {
       const response = await this.client.responses.parse({
         model: this.model,
@@ -69,6 +86,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
           format: zodTextFormat(companyProfileDraftSchema, "company_profile")
         }
       });
+      providerAccepted = true;
       if (!response.output_parsed) {
         throw new ProviderResearchError(
           "permanent",
@@ -80,7 +98,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
       assertEvidencePointers(output, input.pages);
       return structuredResult(response, this.model, COMPANY_PROFILE_PROMPT_VERSION, output);
     } catch (error) {
-      throw mapOpenAiFailure(error);
+      throw mapOpenAiFailure(error, providerAccepted);
     }
   }
 
@@ -88,6 +106,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
     profile: CompanyProfileReadModel;
     queryCount: number;
   }) {
+    let providerAccepted = false;
     try {
       const hasVerifiedGeography = input.profile.claims.some(
         (claim) =>
@@ -124,6 +143,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
           format: zodTextFormat(searchQuerySetDraftSchema, "search_query_set")
         }
       });
+      providerAccepted = true;
       if (!response.output_parsed) {
         throw new ProviderResearchError(
           "permanent",
@@ -145,7 +165,7 @@ export class OpenAIStructuredAnalysisProvider implements StructuredAnalysisProvi
       }
       return structuredResult(response, this.model, SEARCH_QUERY_PROMPT_VERSION, { queries });
     } catch (error) {
-      throw mapOpenAiFailure(error);
+      throw mapOpenAiFailure(error, providerAccepted);
     }
   }
 }
@@ -219,15 +239,28 @@ function structuredResult<T>(
   };
 }
 
-function mapOpenAiFailure(error: unknown) {
-  if (error instanceof ProviderResearchError) return error;
+function mapOpenAiFailure(error: unknown, providerAccepted = false) {
+  if (error instanceof ProviderResearchError) {
+    if (!providerAccepted || error.outcome === "outcome_uncertain") return error;
+    return new ProviderResearchError(
+      error.classification,
+      error.safeCode,
+      error.safeSummary,
+      {
+        httpStatus: error.httpStatus,
+        retryAfterSeconds: error.retryAfterSeconds ?? undefined,
+        outcome: "outcome_uncertain",
+        cause: error
+      }
+    );
+  }
   const status = readNumericProperty(error, "status");
   if (status === 401 || status === 403) {
     return new ProviderResearchError(
       "configuration_error",
       "provider_authentication_failed",
       "The analysis provider requires administrator configuration.",
-      { httpStatus: status, cause: error }
+      { httpStatus: status, outcome: "definitively_rejected", cause: error }
     );
   }
   if (status === 402) {
@@ -235,7 +268,7 @@ function mapOpenAiFailure(error: unknown) {
       "budget_blocked",
       "provider_credits_unavailable",
       "The analysis provider has no available credits.",
-      { httpStatus: status, cause: error }
+      { httpStatus: status, outcome: "definitively_rejected", cause: error }
     );
   }
   if (status === 429) {
@@ -243,7 +276,7 @@ function mapOpenAiFailure(error: unknown) {
       "transient",
       "provider_rate_limited",
       "The analysis provider asked us to retry later.",
-      { httpStatus: status, retryAfterSeconds: 15, cause: error }
+      { httpStatus: status, retryAfterSeconds: 15, outcome: "transient_retryable", cause: error }
     );
   }
   if (status === 408) {
@@ -251,7 +284,7 @@ function mapOpenAiFailure(error: unknown) {
       "transient",
       "provider_temporarily_unavailable",
       "The analysis provider request timed out.",
-      { httpStatus: status, retryAfterSeconds: 15, outcomeUncertain: true, cause: error }
+      { httpStatus: status, retryAfterSeconds: 15, outcome: "outcome_uncertain", cause: error }
     );
   }
   if (status !== null && status >= 500) {
@@ -259,7 +292,7 @@ function mapOpenAiFailure(error: unknown) {
       "transient",
       "provider_temporarily_unavailable",
       "The analysis provider was temporarily unavailable.",
-      { httpStatus: status, retryAfterSeconds: 15, outcomeUncertain: true, cause: error }
+      { httpStatus: status, retryAfterSeconds: 15, outcome: "outcome_uncertain", cause: error }
     );
   }
   if (status !== null && [400, 404, 422].includes(status)) {
@@ -267,7 +300,7 @@ function mapOpenAiFailure(error: unknown) {
       "permanent",
       "provider_request_rejected",
       "The analysis provider could not accept this request.",
-      { httpStatus: status, cause: error }
+      { httpStatus: status, outcome: "definitively_rejected", cause: error }
     );
   }
   if (isConnectionFailure(error)) {
@@ -275,14 +308,53 @@ function mapOpenAiFailure(error: unknown) {
       "transient",
       "provider_connection_failed",
       "The analysis provider connection was interrupted.",
-      { retryAfterSeconds: 15, outcomeUncertain: true, cause: error }
+      { retryAfterSeconds: 15, outcome: "outcome_uncertain", cause: error }
     );
   }
   return new ProviderResearchError(
     "permanent",
     "structured_analysis_failed",
     "The analysis provider could not produce a valid structured result.",
-    { httpStatus: status, cause: error }
+    {
+      httpStatus: status,
+      outcome: "outcome_uncertain",
+      cause: error
+    }
+  );
+}
+
+function mapOpenAiReadinessFailure(error: unknown) {
+  if (error instanceof ProviderResearchError) return error;
+  const status = readNumericProperty(error, "status");
+  if (status === 401 || status === 403) {
+    return new ProviderResearchError(
+      "configuration_error",
+      "provider_authentication_failed",
+      "The analysis provider requires administrator configuration.",
+      { httpStatus: status, outcome: "definitively_rejected", cause: error }
+    );
+  }
+  if (status === 404) {
+    return new ProviderResearchError(
+      "configuration_error",
+      "provider_model_unavailable",
+      "The configured analysis model is unavailable.",
+      { httpStatus: status, outcome: "definitively_rejected", cause: error }
+    );
+  }
+  if (status === 429 || status === 408 || (status !== null && status >= 500) || isConnectionFailure(error)) {
+    return new ProviderResearchError(
+      "transient",
+      "provider_readiness_temporarily_unavailable",
+      "The analysis provider readiness check is temporarily unavailable.",
+      { httpStatus: status, retryAfterSeconds: 15, outcome: "transient_retryable", cause: error }
+    );
+  }
+  return new ProviderResearchError(
+    "configuration_error",
+    "provider_model_unavailable",
+    "The configured analysis model is unavailable.",
+    { httpStatus: status, outcome: "definitively_rejected", cause: error }
   );
 }
 

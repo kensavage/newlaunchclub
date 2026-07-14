@@ -46,6 +46,64 @@ export class SupabaseProviderResearchStore implements ProviderResearchStore {
     });
   }
 
+  reserveOperationCost(operationId: string, _workflowStore: unknown, now = new Date().toISOString()) {
+    return this.rpc<ProviderOperationRecord>("reserve_v3_provider_operation_cost", {
+      p_operation_id: operationId,
+      p_now: now
+    });
+  }
+
+  settleProviderOperation(
+    input: Parameters<ProviderResearchStore["settleProviderOperation"]>[0],
+    _workflowStore: unknown
+  ) {
+    void _workflowStore;
+    return this.rpc<ProviderOperationRecord>("settle_v3_provider_operation", {
+      p_operation_id: input.operationId,
+      p_provider_attempt_id: input.providerAttemptId,
+      p_workflow_attempt_id: input.workflowAttemptId,
+      p_owner: input.owner,
+      p_fencing_token: input.fencingToken,
+      p_outcome: input.outcome,
+      p_classification: input.classification,
+      p_http_status: input.httpStatus,
+      p_safe_code: input.safeCode,
+      p_safe_summary: input.safeSummary,
+      p_retry_at: input.retryAt,
+      p_output_reference: input.outputReference,
+      p_now: input.now ?? new Date().toISOString()
+    });
+  }
+
+  async blockProviderConfiguration(
+    input: Parameters<ProviderResearchStore["blockProviderConfiguration"]>[0],
+    _workflowStore: unknown
+  ) {
+    void _workflowStore;
+    await this.rpc("block_v3_provider_configuration", {
+      p_workflow_id: input.workflowId,
+      p_step_key: input.stepKey,
+      p_workflow_attempt_id: input.workflowAttemptId,
+      p_owner: input.owner,
+      p_fencing_token: input.fencingToken,
+      p_safe_code: input.safeCode,
+      p_safe_summary: input.safeSummary,
+      p_now: input.now ?? new Date().toISOString()
+    });
+  }
+
+  reconcileUncertainOperation(
+    input: Parameters<ProviderResearchStore["reconcileUncertainOperation"]>[0]
+  ) {
+    return this.rpc<ProviderOperationRecord>("admin_reconcile_v3_provider_operation", {
+      p_operation_id: input.operationId,
+      p_resolution: input.resolution,
+      p_actual_cost_cents: input.actualCostCents,
+      p_actor_id: input.actorId,
+      p_now: input.now ?? new Date().toISOString()
+    });
+  }
+
   beginOperationAttempt(operationId: string, phase: "submit" | "poll" | "persist", now = new Date().toISOString()) {
     return this.rpc<ProviderAttemptLease>("begin_provider_operation_attempt", {
       p_operation_id: operationId,

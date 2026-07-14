@@ -5,7 +5,7 @@ Do not run this checklist against production.
 ## Before Preview
 
 - Use an approved Netlify Deploy Preview connected to an isolated development Supabase project.
-- Apply migrations `0001`, `0002`, `0003`, and `0004` only to that project.
+- Apply migrations `0001` through `0006` only to that project when validating PR4. Migration `0006` must not be applied to production during preview acceptance.
 - Confirm `v3_report_workflows` is a Basic logged queue and `pgmq_public` is not exposed.
 - Configure preview-only `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `REPORT_ACCESS_TOKEN_SECRET`, `REPORT_RATE_LIMIT_SALT`, `WORKFLOW_ADMIN_SECRET`, `WORKFLOW_WAKEUP_SECRET`, and `NEXT_PUBLIC_SITE_URL`.
 - Set `NEXT_PUBLIC_SITE_URL` to the exact Deploy Preview origin. The scheduled function prefers valid `DEPLOY_PRIME_URL` metadata when present and otherwise uses this validated, context-specific fallback.
@@ -57,3 +57,11 @@ Do not run this checklist against production.
 ## Decision Gate
 
 PR4 may begin only after every item passes and production activation receives a separate explicit approval. Do not deploy the queue migration, Background Function, or schedule to production during preview acceptance.
+
+## PR4 Provider Gate
+
+Keep `V3_PROVIDER_RESEARCH_ENABLED=true` and `REPORT_USE_MOCK_PROVIDERS=true` for the first PR4 preview pass. Use inert or absent provider credentials and confirm one workflow reaches `ready_for_search_intelligence` with immutable page snapshots, evidence-backed profile claims, normalized queries, a null report, no email, no provider network calls, and a budget of 400 cents available, zero reserved, and zero spent. Repeat delivery and settlement to prove idempotency, then remove the fixture.
+
+Live provider acceptance requires separate explicit approval. Before enabling it, confirm the configured OpenAI credential can retrieve `OPENAI_MODEL_FAST`; the application performs that same readiness request before Firecrawl. A definitive readiness rejection must pause the workflow with no provider operation, no reservation, and no Firecrawl request. For an accepted live run, audit provider identifiers, page and query caps, actual costs, released reservations, resolved transient errors, and the final `ready_for_search_intelligence` state. Never retry an uncertain provider outcome until `npm run research:admin -- reconcile-provider ...` records an administrator decision.
+
+After a live gate, restore mock mode, remove or replace preview provider credentials with inert values, rebuild the preview, remove test records and queue messages where allowed, and retain only privacy-safe acceptance evidence. Production configuration, data, functions, schedules, and migrations remain out of scope.

@@ -76,12 +76,14 @@ describe("durable workflow store", () => {
     expect(store.snapshot().steps.find((step) => step.stepKey === "initialize_workflow")?.attemptCount).toBe(successfulAttempts);
   });
 
-  it("records permanent and configuration failure behavior without automatic retry", async () => {
+  it("pauses configuration failures without scheduling an automatic retry", async () => {
     const store = new MemoryWorkflowStore();
     const workflow = await createWorkflow(store);
     const lease = await store.beginStep({ workflowId: workflow.id, stepKey: "initialize_workflow", owner: "owner", leaseSeconds: 60 });
     await store.failStep({ workflowId: workflow.id, stepKey: "initialize_workflow", owner: "owner", fencingToken: lease.lease!.fencingToken, classification: "configuration_error", safeCode: "configuration", safeSummary: "Administrator configuration required." });
-    expect((await store.getWorkflow(workflow.id))?.status).toBe("failed");
+    expect((await store.getWorkflow(workflow.id))?.status).toBe("paused");
+    expect(store.snapshot().steps.find((step) => step.stepKey === "initialize_workflow")?.status)
+      .toBe("failed_terminal");
     expect(store.snapshot().errors[0]?.classification).toBe("configuration_error");
     expect(classifyWorkflowFailure(new WorkflowConfigurationError())).toBe("configuration_error");
     expect(classifyWorkflowFailure(new Error("permanent"))).toBe("permanent");

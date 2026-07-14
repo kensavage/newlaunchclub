@@ -237,6 +237,56 @@ describe("PR4 provider adapters with mocked HTTP", () => {
     expect(JSON.stringify(openAiBody)).not.toMatch(/chain.of.thought|hidden reasoning/i);
   });
 
+  it("checks OpenAI model readiness with the same credential and without inference", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({
+      id: "gpt-5.4-nano",
+      object: "model",
+      created: 1_700_000_000,
+      owned_by: "openai"
+    }));
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-readiness-key",
+      "gpt-5.4-nano",
+      { fetchImplementation: fetchMock }
+    );
+
+    await expect(provider.checkReadiness()).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toContain("/v1/models/gpt-5.4-nano");
+    expect(init?.method).toBe("GET");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer synthetic-readiness-key");
+    expect(init?.body).toBeUndefined();
+  });
+
+  it.each([
+    [401, "provider_authentication_failed"],
+    [403, "provider_authentication_failed"],
+    [404, "provider_model_unavailable"]
+  ] as const)("treats OpenAI readiness HTTP %i as a nonretrying configuration failure", async (status, safeCode) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({
+      error: {
+        message: "Synthetic readiness rejection.",
+        type: "invalid_request_error",
+        code: status === 404 ? "model_not_found" : "invalid_api_key"
+      }
+    }, status));
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-rejected-key",
+      "gpt-5.4-nano",
+      { fetchImplementation: fetchMock }
+    );
+
+    await expect(provider.checkReadiness()).rejects.toMatchObject({
+      classification: "configuration_error",
+      safeCode,
+      httpStatus: status,
+      outcome: "definitively_rejected"
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("GET");
+  });
+
   it("rejects OpenAI evidence pointers that do not identify stored pages", async () => {
     const profile = syntheticCompanyProfile();
     profile.claims[0]!.evidence[0]!.pageIndex = 9;
@@ -251,7 +301,8 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       pages: syntheticEvidencePages()
     })).rejects.toMatchObject({
       classification: "permanent",
-      safeCode: "structured_evidence_invalid"
+      safeCode: "structured_evidence_invalid",
+      outcome: "outcome_uncertain"
     });
 
     const fabricatedExcerpt = syntheticCompanyProfile();
@@ -271,6 +322,29 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       domain: "example.com",
       pages: syntheticEvidencePages()
     })).rejects.toMatchObject({ safeCode: "structured_evidence_invalid" });
+  });
+
+  it("treats a malformed successful OpenAI response as an uncertain paid outcome", async () => {
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-openai-key",
+      "gpt-5.4-nano",
+      {
+        fetchImplementation: vi.fn<typeof fetch>(async () => new Response("not-json", {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }))
+      }
+    );
+
+    await expect(provider.extractCompanyProfile({
+      normalizedUrl: "https://example.com/",
+      domain: "example.com",
+      pages: syntheticEvidencePages()
+    })).rejects.toMatchObject({
+      safeCode: "structured_analysis_failed",
+      outcome: "outcome_uncertain",
+      outcomeUncertain: true
+    });
   });
 
   it("marks submit timeouts as uncertain and poll timeouts as safely retryable", async () => {
@@ -313,6 +387,26 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       safeCode: "provider_temporarily_unavailable",
       httpStatus: 503
     });
+  });
+
+  it("distinguishes a rejected submission from an uncertain post-acceptance poll", async () => {
+    for (const phase of ["submit", "poll"] as const) {
+      const error = await requestProviderJson({
+        url: "https://provider.example/test",
+        method: phase === "submit" ? "POST" : "GET",
+        headers: {},
+        timeoutMilliseconds: 50,
+        phase,
+        fetchImplementation: vi.fn<typeof fetch>(async () => jsonResponse({
+          error: "Synthetic authentication rejection."
+        }, 401))
+      }).catch((failure: unknown) => failure);
+      expect(error).toMatchObject({
+        classification: "configuration_error",
+        safeCode: "provider_authentication_failed",
+        outcome: phase === "submit" ? "definitively_rejected" : "outcome_uncertain"
+      });
+    }
   });
 });
 

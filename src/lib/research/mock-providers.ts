@@ -63,6 +63,8 @@ export class MockWebsiteResearchProvider implements WebsiteResearchProvider {
 export class MockStructuredAnalysisProvider implements StructuredAnalysisProvider {
   readonly provider = "mock" as const;
 
+  async checkReadiness() {}
+
   async extractCompanyProfile(input: {
     normalizedUrl: string;
     domain: string;

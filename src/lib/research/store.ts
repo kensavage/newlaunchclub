@@ -3,12 +3,15 @@ import type {
   CompanyProfileReadModel,
   ProviderOperationKind,
   ProviderOperationRecord,
+  ProviderOutcome,
   ProviderUsage,
   SearchQueryDraft,
   StructuredAnalysisResult,
   WebsiteEvidencePage,
   WebsiteResearchPage
 } from "@/lib/research/contracts";
+import type { ProviderResearchWorkflowStepKey, FailureClassification } from "@/lib/workflow/schema";
+import type { WorkflowStore } from "@/lib/workflow/store";
 
 export interface ProviderResearchInput {
   workflowId: string;
@@ -27,6 +30,33 @@ export interface ProviderAttemptLease {
   attemptNumber: number;
 }
 
+export interface ProviderOperationSettlementInput {
+  operationId: string;
+  providerAttemptId: string | null;
+  workflowAttemptId: string;
+  owner: string;
+  fencingToken: number;
+  outcome: ProviderOutcome;
+  classification: FailureClassification | null;
+  httpStatus: number | null;
+  safeCode: string | null;
+  safeSummary: string | null;
+  retryAt: string | null;
+  outputReference: string | null;
+  now?: string;
+}
+
+export interface ProviderConfigurationBlockInput {
+  workflowId: string;
+  stepKey: ProviderResearchWorkflowStepKey;
+  workflowAttemptId: string;
+  owner: string;
+  fencingToken: number;
+  safeCode: string;
+  safeSummary: string;
+  now?: string;
+}
+
 export interface ProviderResearchStore {
   getResearchInput(workflowId: string): Promise<ProviderResearchInput | null>;
   ensureOperation(input: {
@@ -41,6 +71,26 @@ export interface ProviderResearchStore {
     now?: string;
   }): Promise<ProviderOperationRecord>;
   getOperation(workflowId: string, operationKind: ProviderOperationKind): Promise<ProviderOperationRecord | null>;
+  reserveOperationCost(
+    operationId: string,
+    workflowStore: WorkflowStore,
+    now?: string
+  ): Promise<ProviderOperationRecord>;
+  settleProviderOperation(
+    input: ProviderOperationSettlementInput,
+    workflowStore: WorkflowStore
+  ): Promise<ProviderOperationRecord>;
+  blockProviderConfiguration(
+    input: ProviderConfigurationBlockInput,
+    workflowStore: WorkflowStore
+  ): Promise<void>;
+  reconcileUncertainOperation(input: {
+    operationId: string;
+    resolution: "definitively_rejected" | "accepted_retryable" | "paid_cancelled";
+    actualCostCents: number | null;
+    actorId: string;
+    now?: string;
+  }, workflowStore?: WorkflowStore): Promise<ProviderOperationRecord>;
   beginOperationAttempt(operationId: string, phase: "submit" | "poll" | "persist", now?: string): Promise<ProviderAttemptLease>;
   recordProviderJob(input: {
     operationId: string;

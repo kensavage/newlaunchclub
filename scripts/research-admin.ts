@@ -9,7 +9,8 @@ async function main() {
   const { getWorkflowStore } = await import("../src/lib/workflow/store-factory");
   const [command = "help", ...args] = process.argv.slice(2);
   const store = getWorkflowStore();
-  const service = new WorkflowAdministratorService(store, createServerCliAdminActor());
+  const actor = createServerCliAdminActor();
+  const service = new WorkflowAdministratorService(store, actor);
 
   if (command === "list") {
     const status = option(args, "--status");
@@ -38,6 +39,35 @@ async function main() {
     print({ ok: true });
   } else if (command === "release-expired-lease") {
     print({ released: await service.releaseExpiredLease(required(args[0], "workflow ID"), required(args[1], "step key")) });
+  } else if (command === "reconcile-provider") {
+    const operationId = required(args[0], "provider operation ID");
+    const resolution = required(args[1], "reconciliation resolution");
+    if (!["definitively_rejected", "accepted_retryable", "paid_cancelled"].includes(resolution)) {
+      throw new Error("Invalid reconciliation resolution.");
+    }
+    const actualOption = option(args, "--actual-cents");
+    const actualCostCents = actualOption === undefined ? null : Number(actualOption);
+    if (actualCostCents !== null && (!Number.isInteger(actualCostCents) || actualCostCents < 0)) {
+      throw new Error("Reconciled actual cost must be a nonnegative integer number of cents.");
+    }
+    if ((resolution === "paid_cancelled") !== (actualCostCents !== null)) {
+      throw new Error("Only paid_cancelled requires --actual-cents.");
+    }
+    const confirmed = args.includes("--yes") || await confirm(
+      `Reconcile provider operation ${operationId} as ${resolution}? Type RECONCILE to continue: `,
+      "RECONCILE"
+    );
+    if (!confirmed) throw new Error("Reconciliation was not confirmed.");
+    const { SupabaseProviderResearchStore } = await import("../src/lib/research/supabase-store-runtime");
+    const url = required(process.env.SUPABASE_URL, "SUPABASE_URL");
+    const serviceRoleKey = required(process.env.SUPABASE_SERVICE_ROLE_KEY, "SUPABASE_SERVICE_ROLE_KEY");
+    const researchStore = SupabaseProviderResearchStore.fromEnv({ url, serviceRoleKey });
+    print(await researchStore.reconcileUncertainOperation({
+      operationId,
+      resolution: resolution as "definitively_rejected" | "accepted_retryable" | "paid_cancelled",
+      actualCostCents,
+      actorId: actor.actorId
+    }));
   } else {
     stdout.write([
       "Launch Club research administrator CLI",
@@ -51,6 +81,7 @@ async function main() {
       "  resume WORKFLOW_ID",
       "  cancel WORKFLOW_ID [--yes]",
       "  release-expired-lease WORKFLOW_ID STEP_KEY",
+      "  reconcile-provider OPERATION_ID RESOLUTION [--actual-cents N] [--yes]",
       ""
     ].join("\n"));
   }
@@ -71,10 +102,10 @@ function required(value: string | undefined, label: string) {
   return value;
 }
 
-async function confirm(prompt: string) {
+async function confirm(prompt: string, expected = "CANCEL") {
   const readline = createInterface({ input: stdin, output: stdout });
   try {
-    return (await readline.question(prompt)).trim() === "CANCEL";
+    return (await readline.question(prompt)).trim() === expected;
   } finally {
     readline.close();
   }
