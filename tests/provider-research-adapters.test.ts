@@ -496,10 +496,49 @@ describe("PR4 provider adapters with mocked HTTP", () => {
       pages: selectCompanyProfileContext(pages).pages
     });
 
-    expect(() => provider.parseCompanyProfileResponse({
+    const result = provider.parseCompanyProfileResponse({
       response,
       evidencePages: pages
-    })).not.toThrow();
+    });
+
+    expect(result.output.claims[0]?.evidence).toEqual([{
+      pageIndex: 0,
+      excerpt: "Example Labs provides buyer research\nfor B2B growth teams."
+    }]);
+  });
+
+  it("persists the exact source substring after NFKC evidence normalization", async () => {
+    const pages = syntheticEvidencePages();
+    const fullwidthName = "\uFF25\uFF58\uFF41\uFF4D\uFF50\uFF4C\uFF45 \uFF2C\uFF41\uFF42\uFF53";
+    pages[0] = {
+      ...pages[0]!,
+      markdown: pages[0]!.markdown.replace("Example Labs", fullwidthName)
+    };
+    const profile = syntheticCompanyProfile();
+    const provider = new OpenAIStructuredAnalysisProvider(
+      "synthetic-openai-key",
+      "gpt-5.4-nano",
+      { fetchImplementation: vi.fn(async () => openAiResponse(
+        profile,
+        "resp_nfkc_evidence",
+        10,
+        10
+      )) }
+    );
+    const response = await provider.createCompanyProfileResponse({
+      normalizedUrl: "https://example.com/",
+      domain: "example.com",
+      pages: selectCompanyProfileContext(pages).pages
+    });
+    const result = provider.parseCompanyProfileResponse({
+      response,
+      evidencePages: pages
+    });
+
+    expect(result.output.claims[0]?.evidence).toEqual([{
+      pageIndex: 0,
+      excerpt: `${fullwidthName} provides buyer research for B2B growth teams.`
+    }]);
   });
 
   it.each([

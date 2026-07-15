@@ -475,14 +475,18 @@ function groundedEvidence(
   pagesByIndex: Map<number, WebsiteEvidencePage>
 ) {
   const seen = new Set<string>();
-  return pointers.filter((pointer) => {
+  const grounded: EvidencePointer[] = [];
+  for (const pointer of pointers) {
     const page = pagesByIndex.get(pointer.pageIndex);
-    if (!page || !evidenceTextMatches(page.markdown, pointer.excerpt)) return false;
-    const key = `${pointer.pageIndex}:${normalizeEvidenceText(pointer.excerpt)}`;
-    if (seen.has(key)) return false;
+    if (!page) continue;
+    const exactExcerpt = findExactEvidenceExcerpt(page.markdown, pointer.excerpt);
+    if (!exactExcerpt) continue;
+    const key = `${pointer.pageIndex}:${exactExcerpt}`;
+    if (seen.has(key)) continue;
     seen.add(key);
-    return true;
-  });
+    grounded.push({ ...pointer, excerpt: exactExcerpt });
+  }
+  return grounded;
 }
 
 function exactAnchorEvidence(
@@ -500,8 +504,65 @@ function exactAnchorEvidence(
   return null;
 }
 
-function evidenceTextMatches(source: string, excerpt: string) {
-  return source.includes(excerpt) || normalizeEvidenceText(source).includes(normalizeEvidenceText(excerpt));
+function findExactEvidenceExcerpt(source: string, candidate: string) {
+  if (source.includes(candidate)) return candidate;
+
+  const normalizedCandidate = normalizeEvidenceText(candidate);
+  if (!normalizedCandidate) return null;
+  const sourceMap = buildEvidenceNormalizationMap(source);
+  let searchFrom = 0;
+  while (searchFrom <= sourceMap.text.length - normalizedCandidate.length) {
+    const matchIndex = sourceMap.text.indexOf(normalizedCandidate, searchFrom);
+    if (matchIndex < 0) return null;
+    const matchEndIndex = matchIndex + normalizedCandidate.length - 1;
+    const rawStart = sourceMap.rawStarts[matchIndex];
+    const rawEnd = sourceMap.rawEnds[matchEndIndex];
+    if (rawStart !== undefined && rawEnd !== undefined) {
+      const exactExcerpt = source.slice(rawStart, rawEnd);
+      if (normalizeEvidenceText(exactExcerpt) === normalizedCandidate) {
+        return exactExcerpt;
+      }
+    }
+    searchFrom = matchIndex + 1;
+  }
+  return null;
+}
+
+function buildEvidenceNormalizationMap(source: string) {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const rawStarts: number[] = [];
+  const rawEnds: number[] = [];
+  let text = "";
+  let pendingWhitespaceStart: number | null = null;
+  let pendingWhitespaceEnd: number | null = null;
+
+  const append = (value: string, rawStart: number, rawEnd: number) => {
+    text += value;
+    for (let index = 0; index < value.length; index += 1) {
+      rawStarts.push(rawStart);
+      rawEnds.push(rawEnd);
+    }
+  };
+
+  for (const segment of segmenter.segment(source)) {
+    const rawStart = segment.index;
+    const rawEnd = rawStart + segment.segment.length;
+    for (const character of segment.segment.normalize("NFKC")) {
+      if (/\s/u.test(character)) {
+        pendingWhitespaceStart ??= rawStart;
+        pendingWhitespaceEnd = rawEnd;
+        continue;
+      }
+      if (pendingWhitespaceStart !== null && text.length > 0) {
+        append(" ", pendingWhitespaceStart, pendingWhitespaceEnd ?? rawStart);
+      }
+      pendingWhitespaceStart = null;
+      pendingWhitespaceEnd = null;
+      append(character, rawStart, rawEnd);
+    }
+  }
+
+  return { text, rawStarts, rawEnds };
 }
 
 function normalizeEvidenceText(value: string) {
