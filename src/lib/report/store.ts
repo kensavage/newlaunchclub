@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { OpportunityReport, ReportJob, ReportStepId } from "@/lib/report/schema";
+import { RESEARCH_READY_PROGRESS_DETAIL } from "@/lib/workflow/schema";
 
 export interface CreateReportJobInput {
   publicId: string;
@@ -61,6 +62,7 @@ export function getStepDetail(step: ReportStepId) {
     crawl: "Reading the homepage and same-domain pages linked from it so the report understands the business.",
     analysis: "Identifying the company, category, primary keyword, and buyer queries.",
     keywords: "Checking keyword demand and search-result surfaces.",
+    research_ready: RESEARCH_READY_PROGRESS_DETAIL,
     reddit: "Looking for relevant discussions and subreddit opportunities.",
     "ai-search": "Creating AI-search prompt and citation opportunity examples.",
     synthesis: "Prioritizing the low-hanging fruit and formatting the report.",

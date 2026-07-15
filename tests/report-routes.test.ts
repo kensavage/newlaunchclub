@@ -103,6 +103,7 @@ describe("report intake and secure access routes", () => {
     const secureBody = await secureResponse.json();
     expect(secureResponse.status).toBe(200);
     expect(secureBody.job.publicId).toBe(acknowledgement.reportAccessToken);
+    expect(secureBody.job.state).toBe("queued");
     expect(secureBody.job.progress).toBeNull();
     expect(secureBody.job.currentStep).toBe("crawl");
     expect(secureBody.job.steps).toEqual([

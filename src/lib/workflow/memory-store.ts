@@ -5,6 +5,7 @@ import {
   INITIAL_REPORT_BUDGET_CENTS,
   INITIAL_WORKFLOW_STEPS,
   PROVIDER_RESEARCH_WORKFLOW_STEPS,
+  RESEARCH_READY_CURRENT_STEP,
   WEEKLY_REFRESH_BUDGET_CENTS,
   WORKFLOW_MESSAGE_TYPE,
   type CostBudgetRecord,
@@ -976,6 +977,7 @@ export function resetMemoryWorkflowStoreForTests() {
 
 export function mapPublicProgress(workflow: WorkflowRecord, steps: WorkflowStepRecord[] = []): SafeWorkflowProgress {
   const failed = workflow.status === "failed";
+  const unavailable = failed || workflow.status === "cancelled";
   const website = steps.find((step) => step.stepKey === "website_research");
   const profile = steps.find((step) => step.stepKey === "company_profile_extraction");
   const queries = steps.find((step) => step.stepKey === "search_query_discovery");
@@ -984,7 +986,7 @@ export function mapPublicProgress(workflow: WorkflowRecord, steps: WorkflowStepR
     workflow.status === "waiting_retry" || workflow.status === "paused" ? "temporarily_delayed" :
     workflow.status === "partially_complete" ? "partially_complete" :
     workflow.status === "completed" ? "complete" :
-    failed || workflow.status === "cancelled" ? "failed" :
+    unavailable ? "failed" :
     workflow.status === "queued" || workflow.status === "dispatch_pending" ? "queued" : "preparing_research";
   const preparationStatus =
     state === "failed" ? "failed" as const : state === "complete" ? "complete" as const : "running" as const;
@@ -998,7 +1000,8 @@ export function mapPublicProgress(workflow: WorkflowRecord, steps: WorkflowStepR
         ? "running" as const :
       step?.status === "failed_terminal" || step?.status === "cancelled" ? "failed" as const :
       "pending" as const;
-    const currentStep = failed ? "failed" :
+    const currentStep = workflow.status === "ready_for_search_intelligence" ? RESEARCH_READY_CURRENT_STEP :
+      unavailable ? "failed" :
       queries?.status === "running" || queries?.status === "retry_scheduled" || queries?.status === "succeeded" ? "keywords" :
       profile?.status === "running" || profile?.status === "retry_scheduled" || profile?.status === "succeeded" ? "analysis" :
       website.status === "running" || website.status === "retry_scheduled" || website.status === "succeeded" ? "crawl" : "crawl";
@@ -1017,7 +1020,9 @@ export function mapPublicProgress(workflow: WorkflowRecord, steps: WorkflowStepR
 
   return {
     state,
-    currentStep: preparationStatus === "failed" ? "failed" : "crawl",
+    currentStep: workflow.status === "ready_for_search_intelligence"
+      ? RESEARCH_READY_CURRENT_STEP
+      : preparationStatus === "failed" ? "failed" : "crawl",
     steps: [
       {
         id: "queued",

@@ -15,6 +15,7 @@ const progressByStep: Record<ReportStepId, number> = {
   crawl: 15,
   analysis: 30,
   keywords: 52,
+  research_ready: 52,
   reddit: 70,
   "ai-search": 82,
   synthesis: 94,

@@ -58,11 +58,21 @@ export const reportClaimSchema = z
   .superRefine(requireMeasuredEvidence);
 
 export const reportStatusSchema = z.enum(["queued", "running", "complete", "failed"]);
+export const publicProgressStateSchema = z.enum([
+  "queued",
+  "preparing_research",
+  "research_ready",
+  "temporarily_delayed",
+  "partially_complete",
+  "complete",
+  "failed"
+]);
 export const reportStepIdSchema = z.enum([
   "queued",
   "crawl",
   "analysis",
   "keywords",
+  "research_ready",
   "reddit",
   "ai-search",
   "synthesis",
@@ -225,6 +235,7 @@ export const reportJobSchema = z.object({
 export const publicReportJobSchema = z.object({
   publicId: z.string(),
   status: reportStatusSchema,
+  state: publicProgressStateSchema,
   currentStep: reportStepIdSchema,
   progress: z.number().min(0).max(100).nullable(),
   steps: z.array(reportStepSchema),
@@ -248,6 +259,7 @@ export type EvidenceReference = z.infer<typeof evidenceReferenceSchema>;
 export type EvidenceMetadata = z.infer<typeof evidenceMetadataSchema>;
 export type ReportClaim = z.infer<typeof reportClaimSchema>;
 export type ReportStatus = z.infer<typeof reportStatusSchema>;
+export type PublicProgressState = z.infer<typeof publicProgressStateSchema>;
 export type ReportStepId = z.infer<typeof reportStepIdSchema>;
 export type StepStatus = z.infer<typeof stepStatusSchema>;
 export type ReportStep = z.infer<typeof reportStepSchema>;

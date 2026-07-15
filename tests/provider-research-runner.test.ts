@@ -71,7 +71,7 @@ describe("PR4 durable provider research runner", () => {
     const progress = await harness.workflowStore.getPublicProgress(harness.reportRequestId);
     expect(progress).toMatchObject({
       state: "research_ready",
-      currentStep: "keywords",
+      currentStep: "research_ready",
       steps: [
         { label: "Request received", status: "complete" },
         { label: "Reviewing your website", status: "complete" },
@@ -80,7 +80,15 @@ describe("PR4 durable provider research runner", () => {
       ]
     });
     const response = createPublicWorkflowResponse("lc_report_synthetic_access_token_123", progress!);
-    expect(response).toMatchObject({ job: { status: "running", progress: null }, report: null });
+    expect(response).toMatchObject({
+      job: {
+        status: "running",
+        state: "research_ready",
+        currentStep: "research_ready",
+        progress: null
+      },
+      report: null
+    });
     expect(JSON.stringify(response)).not.toMatch(/Google|Reddit|competitor|opportunity|report ready/i);
 
     await expect(runner.runStep(harness.workflow.id, "website_research", "duplicate-owner"))

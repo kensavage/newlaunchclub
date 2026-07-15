@@ -1,9 +1,13 @@
 import { z } from "zod";
+import type { PublicProgressState, ReportStepId } from "@/lib/report/schema";
 
 export const WORKFLOW_MESSAGE_TYPE = "launchclub.report.requested.v1" as const;
 export const WORKFLOW_QUEUE_NAME = "v3_report_workflows" as const;
 export const INITIAL_REPORT_BUDGET_CENTS = 400;
 export const WEEKLY_REFRESH_BUDGET_CENTS = 100;
+export const RESEARCH_READY_CURRENT_STEP = "research_ready" as const;
+export const RESEARCH_READY_PROGRESS_DETAIL =
+  "Initial company research is complete. Preparing broader search intelligence.";
 
 export const INITIAL_WORKFLOW_STEPS = [
   "initialize_workflow",
@@ -220,17 +224,10 @@ export interface WorkflowDetail {
 }
 
 export interface SafeWorkflowProgress {
-  state:
-    | "queued"
-    | "preparing_research"
-    | "research_ready"
-    | "temporarily_delayed"
-    | "partially_complete"
-    | "complete"
-    | "failed";
-  currentStep: string;
+  state: PublicProgressState;
+  currentStep: ReportStepId;
   steps: Array<{
-    id: string;
+    id: ReportStepId;
     label: string;
     status: "pending" | "running" | "complete" | "failed";
     detail: string | null;

@@ -10,6 +10,7 @@ import {
   evidenceMetadataSchema,
   evidenceStatusSchema,
   opportunityReportSchema,
+  reportResponseSchema,
   reportClaimSchema,
   type OpportunityReport
 } from "@/lib/report/schema";
@@ -194,6 +195,34 @@ const validReport: OpportunityReport = {
 };
 
 describe("report evidence, scoring, and truth labeling", () => {
+  it("accepts the public search-intelligence handoff without claiming report completion", () => {
+    const response = reportResponseSchema.parse({
+      job: {
+        publicId: "secure-report-access",
+        status: "running",
+        state: "research_ready",
+        currentStep: "research_ready",
+        progress: null,
+        steps: [
+          { id: "queued", label: "Request received", status: "complete" },
+          { id: "crawl", label: "Reviewing your website", status: "complete" },
+          { id: "analysis", label: "Building your company profile", status: "complete" },
+          { id: "keywords", label: "Preparing your market research", status: "complete" }
+        ],
+        errorSummary: null
+      },
+      report: null
+    });
+
+    expect(response.job).toMatchObject({
+      status: "running",
+      state: "research_ready",
+      currentStep: "research_ready",
+      progress: null
+    });
+    expect(response.report).toBeNull();
+  });
+
   it("accepts a visitor-safe report payload", () => {
     expect(opportunityReportSchema.parse(validReport).publicId).toBe("report123");
   });

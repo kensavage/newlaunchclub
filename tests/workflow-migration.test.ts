@@ -4,6 +4,8 @@ import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sha256 } from "@/lib/research/integrity";
+import { mapPublicProgress } from "@/lib/workflow/memory-store";
+import type { SafeWorkflowProgress, WorkflowDetail } from "@/lib/workflow/schema";
 import {
   SYNTHETIC_RESEARCH_TIME,
   syntheticCompanyProfile,
@@ -25,7 +27,8 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       "0006_v3_provider_failure_settlement.sql",
       "0007_v3_openai_response_recovery_context_selection.sql",
       "0008_v3_idempotent_provider_settlement.sql",
-      "0009_v3_queue_state_preservation.sql"
+      "0009_v3_queue_state_preservation.sql",
+      "0010_v3_public_progress_handoff.sql"
     ]) {
       let sql = await readFile(path.join(process.cwd(), "supabase/migrations", name), "utf8");
       if (name.startsWith("0001")) sql = sql.replace("create extension if not exists pgcrypto;", "");
@@ -130,10 +133,13 @@ describe("V3 isolated PostgreSQL migration stack", () => {
           (select count(*)::integer from search_query_sets where workflow_id = '${context.workflowId}') query_sets,
           (select count(*)::integer from report_cost_entries where workflow_id = '${context.workflowId}') costs
       `)).rows[0]!;
-      const progressBefore = (await db.query<{ progress: { state: string } }>(`
+      const progressBefore = (await db.query<{ progress: { state: string; currentStep: string } }>(`
         select get_public_workflow_progress('${context.reportRequestId}') progress
       `)).rows[0]!.progress;
-      expect(progressBefore.state).toBe("research_ready");
+      expect(progressBefore).toMatchObject({
+        state: "research_ready",
+        currentStep: "research_ready"
+      });
 
       const enqueue = () => db.query<{ result: { messageId: string } }>(`
         select enqueue_v3_workflow_message(
@@ -195,18 +201,20 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       `);
       await db.query(`select reconcile_v3_workflow_queue_state('${context.workflowId}', now())`);
       await db.query(`select reconcile_v3_workflow_queue_state('${context.workflowId}', now())`);
-      const repaired = (await db.query<{ status: string; phase: string; events: number; public_state: string }>(`
+      const repaired = (await db.query<{ status: string; phase: string; events: number; public_state: string; public_step: string }>(`
         select
           (select status from research_workflows where id = '${context.workflowId}') status,
           (select current_phase from research_workflows where id = '${context.workflowId}') phase,
           (select count(*)::integer from workflow_events where workflow_id = '${context.workflowId}' and event_type = 'workflow_queue_state_reconciled') events,
-          (select get_public_workflow_progress('${context.reportRequestId}') ->> 'state') public_state
+          (select get_public_workflow_progress('${context.reportRequestId}') ->> 'state') public_state,
+          (select get_public_workflow_progress('${context.reportRequestId}') ->> 'currentStep') public_step
       `)).rows[0]!;
       expect(repaired).toEqual({
         status: "ready_for_search_intelligence",
         phase: "search_intelligence",
         events: 1,
-        public_state: "research_ready"
+        public_state: "research_ready",
+        public_step: "research_ready"
       });
 
       await expectSqlFailure(db, "queue_reconcile_anon", async () => {
@@ -267,6 +275,185 @@ describe("V3 isolated PostgreSQL migration stack", () => {
         status: "ready_for_search_intelligence",
         currentPhase: "search_intelligence"
       });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("keeps Supabase and memory public progress aligned for every PR4 workflow state", async () => {
+    await db.exec("begin");
+    try {
+      const foundation = await setupReadyFoundationWorkflow(db, "public-foundation.example", "pf");
+      await assertPublicProgressParity(db, foundation, {
+        state: "preparing_research",
+        currentStep: "crawl"
+      });
+      await db.exec(`
+        update research_steps set status = 'running'
+        where workflow_id = '${foundation.workflowId}' and step_key = 'mark_ready_for_provider_research';
+        update research_workflows set status = 'running', current_phase = 'mark_ready_for_provider_research'
+        where id = '${foundation.workflowId}';
+      `);
+      await assertPublicProgressParity(db, foundation, {
+        state: "preparing_research",
+        currentStep: "crawl"
+      });
+
+      const context = await setupProviderWorkflow(db, "public-progress.example", "pp");
+      const cases = [
+        {
+          workflowStatus: "queued",
+          phase: "website_research",
+          website: "pending",
+          profile: "pending",
+          query: "pending",
+          expected: { state: "queued", currentStep: "crawl" }
+        },
+        {
+          workflowStatus: "dispatch_pending",
+          phase: "website_research",
+          website: "pending",
+          profile: "pending",
+          query: "pending",
+          expected: { state: "queued", currentStep: "crawl" }
+        },
+        {
+          workflowStatus: "running",
+          phase: "website_research",
+          website: "running",
+          profile: "pending",
+          query: "pending",
+          expected: { state: "preparing_research", currentStep: "crawl" }
+        },
+        {
+          workflowStatus: "running",
+          phase: "company_profile_extraction",
+          website: "succeeded",
+          profile: "running",
+          query: "pending",
+          expected: { state: "preparing_research", currentStep: "analysis" }
+        },
+        {
+          workflowStatus: "running",
+          phase: "search_query_discovery",
+          website: "succeeded",
+          profile: "succeeded",
+          query: "running",
+          expected: { state: "preparing_research", currentStep: "keywords" }
+        },
+        {
+          workflowStatus: "ready_for_search_intelligence",
+          phase: "search_intelligence",
+          website: "succeeded",
+          profile: "succeeded",
+          query: "succeeded",
+          expected: { state: "research_ready", currentStep: "research_ready" }
+        },
+        {
+          workflowStatus: "waiting_retry",
+          phase: "search_query_discovery",
+          website: "succeeded",
+          profile: "succeeded",
+          query: "retry_scheduled",
+          expected: { state: "temporarily_delayed", currentStep: "keywords" }
+        },
+        {
+          workflowStatus: "paused",
+          phase: "search_query_discovery",
+          website: "succeeded",
+          profile: "succeeded",
+          query: "retry_scheduled",
+          expected: { state: "temporarily_delayed", currentStep: "keywords" }
+        },
+        {
+          workflowStatus: "partially_complete",
+          phase: "search_intelligence",
+          website: "succeeded",
+          profile: "succeeded",
+          query: "succeeded",
+          expected: { state: "partially_complete", currentStep: "keywords" }
+        },
+        {
+          workflowStatus: "completed",
+          phase: "search_intelligence",
+          website: "succeeded",
+          profile: "succeeded",
+          query: "succeeded",
+          expected: { state: "complete", currentStep: "keywords" }
+        },
+        {
+          workflowStatus: "failed",
+          phase: "search_query_discovery",
+          website: "succeeded",
+          profile: "succeeded",
+          query: "failed_terminal",
+          expected: { state: "failed", currentStep: "failed" }
+        },
+        {
+          workflowStatus: "cancelled",
+          phase: "search_query_discovery",
+          website: "succeeded",
+          profile: "succeeded",
+          query: "cancelled",
+          expected: { state: "failed", currentStep: "failed" }
+        }
+      ] as const;
+
+      for (const mapping of cases) {
+        await db.exec(`
+          update research_steps set status = case step_key
+            when 'website_research' then '${mapping.website}'
+            when 'company_profile_extraction' then '${mapping.profile}'
+            when 'search_query_discovery' then '${mapping.query}'
+            else status end
+          where workflow_id = '${context.workflowId}';
+          update research_workflows
+          set status = '${mapping.workflowStatus}', current_phase = '${mapping.phase}'
+          where id = '${context.workflowId}';
+        `);
+        await assertPublicProgressParity(db, context, mapping.expected);
+      }
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("keeps the public-progress RPC stable, security-definer protected, and service-role-only", async () => {
+    const functionSecurity = await db.query<{
+      security_definer: boolean;
+      stable: boolean;
+      empty_search_path: boolean;
+      anon_execute: boolean;
+      authenticated_execute: boolean;
+      service_execute: boolean;
+    }>(`
+      select
+        p.prosecdef security_definer,
+        p.provolatile = 's' stable,
+        coalesce(array_to_string(p.proconfig, ',') in ('search_path=', 'search_path=""'), false) empty_search_path,
+        has_function_privilege('anon', 'public.get_public_workflow_progress(uuid)', 'execute') anon_execute,
+        has_function_privilege('authenticated', 'public.get_public_workflow_progress(uuid)', 'execute') authenticated_execute,
+        has_function_privilege('service_role', 'public.get_public_workflow_progress(uuid)', 'execute') service_execute
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'get_public_workflow_progress'
+    `);
+    expect(functionSecurity.rows[0]).toEqual({
+      security_definer: true,
+      stable: true,
+      empty_search_path: true,
+      anon_execute: false,
+      authenticated_execute: false,
+      service_execute: true
+    });
+
+    await db.exec("begin");
+    try {
+      await expectSqlFailure(db, "public_progress_anon", async () => {
+        await db.exec("set local role anon");
+        return db.query(`select get_public_workflow_progress(gen_random_uuid())`);
+      }, /permission denied/i);
+      await db.exec("reset role");
     } finally {
       await db.exec("rollback");
     }
@@ -1604,6 +1791,27 @@ async function setupProviderWorkflow(db: PGlite, domain: string, seed: string) {
   `);
   expect(continuation.rows[0]?.prepared).toBe(true);
   return context;
+}
+
+async function assertPublicProgressParity(
+  db: PGlite,
+  context: { workflowId: string; reportRequestId: string },
+  expected: Pick<SafeWorkflowProgress, "state" | "currentStep">
+) {
+  const result = await db.query<{
+    progress: SafeWorkflowProgress;
+    detail: WorkflowDetail;
+  }>(`
+    select
+      get_public_workflow_progress('${context.reportRequestId}') progress,
+      get_research_workflow_detail('${context.workflowId}') detail
+  `);
+  const progress = result.rows[0]!.progress;
+  const detail = result.rows[0]!.detail;
+  const memoryProgress = mapPublicProgress(detail.workflow, detail.steps);
+
+  expect(progress).toMatchObject(expected);
+  expect(memoryProgress).toEqual(progress);
 }
 
 async function setupReadyFoundationWorkflow(db: PGlite, domain: string, seed: string) {

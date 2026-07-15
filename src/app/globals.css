@@ -2441,6 +2441,13 @@ h1 {
   text-transform: none;
 }
 
+.progress-handoff {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .timeline {
   margin: 0;
   padding: 0;

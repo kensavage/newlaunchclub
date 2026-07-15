@@ -41,6 +41,7 @@ export function createPublicReportResponse(
     job: {
       publicId,
       status: job.status,
+      state: reportState(job.status),
       currentStep: job.currentStep,
       progress: job.status === "complete" ? 100 : null,
       steps: job.steps.map((step) => ({
@@ -72,6 +73,7 @@ export function createPublicWorkflowResponse(
     job: {
       publicId,
       status,
+      state: progress.state,
       currentStep: progress.currentStep,
       progress: null,
       steps: progress.steps.map((step) => ({
@@ -82,6 +84,13 @@ export function createPublicWorkflowResponse(
     },
     report: null
   });
+}
+
+function reportState(status: ReportJob["status"]) {
+  if (status === "complete") return "complete" as const;
+  if (status === "failed") return "failed" as const;
+  if (status === "queued") return "queued" as const;
+  return "preparing_research" as const;
 }
 
 export function getPublicReportError(error: unknown) {
