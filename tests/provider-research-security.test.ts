@@ -13,7 +13,8 @@ const researchSources = [
 const migration = [
   "0005_v3_provider_research_evidence.sql",
   "0006_v3_provider_failure_settlement.sql",
-  "0007_v3_openai_response_recovery_context_selection.sql"
+  "0007_v3_openai_response_recovery_context_selection.sql",
+  "0008_v3_idempotent_provider_settlement.sql"
 ].map((name) => readFileSync(path.join(root, "supabase/migrations", name), "utf8")).join("\n");
 const envSchema = readFileSync(path.join(root, "src/lib/env-schema.ts"), "utf8");
 
@@ -75,13 +76,20 @@ describe("PR4 provider research security and scope boundaries", () => {
       "analysis_response_diagnostics",
       "analysis_response_retrieval_attempts",
       "content_selection_runs",
-      "content_selection_pages"
+      "content_selection_pages",
+      "provider_operation_settlements"
     ]) {
       expect(migration).toContain(`alter table public.${tableName} enable row level security`);
       expect(migration).toMatch(new RegExp(
         `revoke all on table public\\.${tableName}[\\s\\S]+?from public, anon, authenticated, service_role;`
       ));
     }
+    expect(migration).toMatch(
+      /revoke execute on function public\.settle_v3_provider_operation_pre_0008\([\s\S]+?service_role;/
+    );
+    expect(migration).toMatch(
+      /revoke execute on function public\.admin_transition_research_workflow_pre_0008\([\s\S]+?service_role;/
+    );
     expect(migration).not.toMatch(/grant[^;]+(?:anon|authenticated)/i);
   });
 });

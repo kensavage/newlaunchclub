@@ -23,7 +23,8 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       "0004_v3_supabase_queue.sql",
       "0005_v3_provider_research_evidence.sql",
       "0006_v3_provider_failure_settlement.sql",
-      "0007_v3_openai_response_recovery_context_selection.sql"
+      "0007_v3_openai_response_recovery_context_selection.sql",
+      "0008_v3_idempotent_provider_settlement.sql"
     ]) {
       let sql = await readFile(path.join(process.cwd(), "supabase/migrations", name), "utf8");
       if (name.startsWith("0001")) sql = sql.replace("create extension if not exists pgcrypto;", "");
@@ -1001,6 +1002,351 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       await db.exec("rollback");
     }
   });
+
+  it("settles a paid captured response exactly once across identical and concurrent replay", async () => {
+    await db.exec("begin");
+    try {
+      const fixture = await setupCapturedProfileSettlementFixture(
+        db,
+        "settlement-replay.example",
+        "y"
+      );
+      const settlement = settleProviderSql({
+        ...fixture.profile,
+        providerAttemptId: null,
+        outcome: "succeeded",
+        classification: null,
+        safeCode: null,
+        safeSummary: null,
+        retryAt: "null",
+        outputReference: fixture.outputReference
+      });
+
+      await Promise.all([db.query(settlement), db.query(settlement)]);
+      await db.query(settlement);
+
+      const state = await db.query<{
+        step_status: string;
+        spent: number;
+        reserved: number;
+        receipts: number;
+        actual_entries: number;
+        release_entries: number;
+        success_events: number;
+        attempts: number;
+      }>(`
+        select rs.status step_status, b.spent_cents spent,
+          b.reserved_cents reserved,
+          (select count(*)::integer from provider_operation_settlements
+            where provider_operation_id = po.id) receipts,
+          (select count(*)::integer from report_cost_entries
+            where idempotency_key = po.idempotency_key || ':provider-response:' ||
+              po.reservation_generation::text || ':actual') actual_entries,
+          (select count(*)::integer from report_cost_entries
+            where idempotency_key = po.idempotency_key || ':provider-response:' ||
+              po.reservation_generation::text || ':unused') release_entries,
+          (select count(*)::integer from workflow_events
+            where workflow_id = po.workflow_id
+              and event_type = 'provider_operation_succeeded'
+              and safe_metadata ->> 'step' = 'company_profile_extraction') success_events,
+          rs.attempt_count attempts
+        from provider_operations po
+        join research_steps rs on rs.id = po.step_id
+        join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${fixture.profile.operationId}'
+      `);
+      expect(state.rows[0]).toEqual({
+        step_status: "succeeded",
+        spent: 3,
+        reserved: 0,
+        receipts: 1,
+        actual_entries: 1,
+        release_entries: 1,
+        success_events: 1,
+        attempts: 1
+      });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("settles captured query generation once and stops at search-intelligence readiness", async () => {
+    await db.exec("begin");
+    try {
+      const fixture = await setupCapturedProfileSettlementFixture(
+        db,
+        "query-settlement.example",
+        "q"
+      );
+      await db.query(settleProviderSql({
+        ...fixture.profile,
+        providerAttemptId: null,
+        outcome: "succeeded",
+        classification: null,
+        safeCode: null,
+        safeSummary: null,
+        retryAt: "null",
+        outputReference: fixture.outputReference
+      }));
+
+      const queryOperation = await beginLeasedProviderOperation(db, {
+        workflowId: fixture.workflowId,
+        kind: "search_query_discovery",
+        provider: "openai",
+        owner: "captured-query-q",
+        suffix: "captured-query-q",
+        cost: 25
+      });
+      const queries = syntheticQueries(15);
+      const responseText = JSON.stringify({ queries });
+      const captured = await db.query<{ artifact: { id: string } }>(`
+        select capture_v3_analysis_response(
+          '${queryOperation.operationId}', '${queryOperation.providerAttemptId}',
+          'resp-captured-query-q', 'request-captured-query-q', 'completed',
+          'gpt-test', 'search-query-discovery-v2', 'search-query-schema-v2',
+          now(), now(),
+          '{"inputTokens":140,"outputTokens":60,"totalTokens":200,"cachedInputTokens":0}'::jsonb,
+          2, ${sqlLiteral(responseText)}, null, null, null, true,
+          '{"outputItemTypes":["message"],"messageStatuses":["completed"],"storedForRecovery":true,"outputTruncated":false}'::jsonb,
+          now()
+        ) artifact
+      `);
+      const artifactId = captured.rows[0]!.artifact.id;
+      await db.query(`select record_v3_analysis_processing_result(
+        '${artifactId}', 'parse', 'succeeded', null, null, null, now()
+      )`);
+      const persisted = await db.query<{
+        query_set: { querySetId: string; queryCount: number };
+      }>(persistQueriesSql({
+        operationId: queryOperation.operationId,
+        attemptId: queryOperation.providerAttemptId,
+        profileVersionId: fixture.profileVersionId,
+        queries,
+        suffix: "captured-query-q"
+      }));
+      await db.query(`select record_v3_analysis_processing_result(
+        '${artifactId}', 'complete', 'succeeded', null, null, null, now()
+      )`);
+      const outputReference = `search-query-set:${persisted.rows[0]!.query_set.querySetId}`;
+      const settlement = settleProviderSql({
+        ...queryOperation,
+        providerAttemptId: null,
+        outcome: "succeeded",
+        classification: null,
+        safeCode: null,
+        safeSummary: null,
+        retryAt: "null",
+        outputReference
+      });
+      await db.query(settlement);
+      await db.query(settlement);
+
+      const state = await db.query<{
+        workflow_status: string;
+        phase: string;
+        step_status: string;
+        spent: number;
+        reserved: number;
+        receipts: number;
+        query_count: number;
+        distinct_queries: number;
+        response_artifacts: number;
+        readiness_events: number;
+        report_status: string;
+        report_reference: string | null;
+        result_rows: number;
+      }>(`
+        select rw.status workflow_status, rw.current_phase phase,
+          rs.status step_status, b.spent_cents spent,
+          b.reserved_cents reserved,
+          (select count(*)::integer from provider_operation_settlements
+            where provider_operation_id = po.id) receipts,
+          (select count(*)::integer from search_queries
+            where query_set_id = '${persisted.rows[0]!.query_set.querySetId}') query_count,
+          (select count(distinct normalized_query)::integer from search_queries
+            where query_set_id = '${persisted.rows[0]!.query_set.querySetId}') distinct_queries,
+          (select count(*)::integer from analysis_response_artifacts
+            where provider_operation_id = po.id and artifact_complete) response_artifacts,
+          (select count(*)::integer from workflow_events
+            where workflow_id = rw.id
+              and event_type = 'workflow_ready_for_search_intelligence') readiness_events,
+          r.report_status, r.current_revision_reference report_reference,
+          (select count(*)::integer from report_results rr
+            where rr.public_id = r.legacy_public_id) result_rows
+        from research_workflows rw
+        join research_steps rs on rs.workflow_id = rw.id
+          and rs.step_key = 'search_query_discovery'
+        join provider_operations po on po.step_id = rs.id
+        join report_cost_budgets b on b.workflow_id = rw.id
+        join reports r on r.id = rw.report_id
+        where rw.id = '${fixture.workflowId}'
+      `);
+      expect(persisted.rows[0]!.query_set.queryCount).toBe(15);
+      expect(state.rows[0]).toEqual({
+        workflow_status: "ready_for_search_intelligence",
+        phase: "search_intelligence",
+        step_status: "succeeded",
+        spent: 5,
+        reserved: 0,
+        receipts: 1,
+        query_count: 15,
+        distinct_queries: 15,
+        response_artifacts: 1,
+        readiness_events: 1,
+        report_status: "queued",
+        report_reference: null,
+        result_rows: 0
+      });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("rejects conflicting settlement outcome, identity, exact cost, and currency", async () => {
+    await db.exec("begin");
+    try {
+      const fixture = await setupCapturedProfileSettlementFixture(
+        db,
+        "settlement-conflict.example",
+        "z"
+      );
+      const settlementInput = {
+        ...fixture.profile,
+        providerAttemptId: null,
+        outcome: "succeeded" as const,
+        classification: null,
+        safeCode: null,
+        safeSummary: null,
+        retryAt: "null",
+        outputReference: fixture.outputReference
+      };
+      await db.query(settleProviderSql(settlementInput));
+
+      await expectSqlFailure(db, "settlement_outcome_conflict", () => db.query(
+        settleProviderSql({
+          ...settlementInput,
+          outcome: "cancelled",
+          outputReference: null
+        })
+      ), /provider_settlement_idempotency_conflict/);
+      await expectSqlFailure(db, "settlement_identity_conflict", () => db.query(
+        settleProviderSql({
+          ...settlementInput,
+          workflowAttemptId: "00000000-0000-4000-8000-000000000008"
+        })
+      ), /provider_settlement_idempotency_conflict/);
+      await expectSqlFailure(db, "settlement_cost_conflict", async () => {
+        await db.query(`update provider_operations set actual_cost_cents = 2
+          where id = '${fixture.profile.operationId}'`);
+        return db.query(settleProviderSql(settlementInput));
+      }, /provider_settlement_idempotency_conflict/);
+      await expectSqlFailure(db, "settlement_currency_conflict", async () => {
+        await db.query(`update provider_operations set currency_code = 'EUR'
+          where id = '${fixture.profile.operationId}'`);
+        return db.query(settleProviderSql(settlementInput));
+      }, /provider_settlement_currency_conflict/);
+
+      const unchanged = await db.query<{
+        spent: number;
+        receipts: number;
+        events: number;
+      }>(`
+        select b.spent_cents spent,
+          (select count(*)::integer from provider_operation_settlements
+            where provider_operation_id = po.id) receipts,
+          (select count(*)::integer from workflow_events
+            where workflow_id = po.workflow_id
+              and event_type = 'provider_operation_succeeded'
+              and safe_metadata ->> 'step' = 'company_profile_extraction') events
+        from provider_operations po
+        join report_cost_budgets b on b.workflow_id = po.workflow_id
+        where po.id = '${fixture.profile.operationId}'
+      `);
+      expect(unchanged.rows[0]).toEqual({ spent: 3, receipts: 1, events: 1 });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("recovers a persisted paid response through the audited administrator transition", async () => {
+    await db.exec("begin");
+    try {
+      const fixture = await setupCapturedProfileSettlementFixture(
+        db,
+        "settlement-recovery.example",
+        "r"
+      );
+      const queueBefore = (await db.query<{ count: number }>(`
+        select count(*)::integer count from pgmq.q_v3_report_workflows
+      `)).rows[0]!.count;
+      await db.query(`update workflow_leases
+        set expires_at = now() - interval '1 second'
+        where workflow_id = '${fixture.workflowId}'
+          and step_id = (select id from research_steps
+            where workflow_id = '${fixture.workflowId}'
+              and step_key = 'company_profile_extraction')
+          and released_at is null`);
+
+      const recovery = `select admin_transition_research_workflow(
+        '${fixture.workflowId}', 'recover_settled_step',
+        'company_profile_extraction', 'pr4-test-admin', now()
+      )`;
+      await db.query(recovery);
+      await db.query(recovery);
+
+      const state = await db.query<{
+        workflow_status: string;
+        step_status: string;
+        attempts: number;
+        running_attempts: number;
+        receipts: number;
+        spent: number;
+        reserved: number;
+        queue_count: number;
+        recovery_events: number;
+        audits: number;
+        active_leases: number;
+      }>(`
+        select rw.status workflow_status, rs.status step_status,
+          rs.attempt_count attempts,
+          (select count(*)::integer from research_attempts
+            where step_id = rs.id and outcome = 'running') running_attempts,
+          (select count(*)::integer from provider_operation_settlements
+            where provider_operation_id = po.id) receipts,
+          b.spent_cents spent, b.reserved_cents reserved,
+          (select count(*)::integer from pgmq.q_v3_report_workflows) queue_count,
+          (select count(*)::integer from workflow_events
+            where workflow_id = rw.id
+              and event_type = 'administrator_settled_step_recovered') recovery_events,
+          (select count(*)::integer from audit_logs
+            where entity_id = rw.id
+              and event_type = 'administrator_settled_step_recovered') audits,
+          (select count(*)::integer from workflow_leases
+            where workflow_id = rw.id and released_at is null) active_leases
+        from research_workflows rw
+        join research_steps rs on rs.workflow_id = rw.id
+          and rs.step_key = 'company_profile_extraction'
+        join provider_operations po on po.step_id = rs.id
+        join report_cost_budgets b on b.workflow_id = rw.id
+        where rw.id = '${fixture.workflowId}'
+      `);
+      expect(state.rows[0]).toEqual({
+        workflow_status: "dispatch_pending",
+        step_status: "succeeded",
+        attempts: 1,
+        running_attempts: 0,
+        receipts: 1,
+        spent: 3,
+        reserved: 0,
+        queue_count: queueBefore + 1,
+        recovery_events: 1,
+        audits: 1,
+        active_leases: 0
+      });
+    } finally {
+      await db.exec("rollback");
+    }
+  });
 });
 
 function intakeSql(domain = "example.com", seed = "a") {
@@ -1238,6 +1584,91 @@ async function completeAndSettleWebsite(
     retryAt: "null"
   }));
   return operation;
+}
+
+async function setupCapturedProfileSettlementFixture(
+  db: PGlite,
+  domain: string,
+  seed: string
+) {
+  const context = await setupProviderWorkflow(db, domain, seed);
+  const website = await beginLeasedProviderOperation(db, {
+    workflowId: context.workflowId,
+    kind: "website_research",
+    provider: "firecrawl",
+    owner: `captured-website-${seed}`,
+    suffix: `captured-website-${seed}`,
+    cost: 10
+  });
+  const websiteContent = [
+    "Example Labs provides buyer research for B2B growth teams.",
+    "Its documented methodology and public case studies help customers make evidence-based decisions."
+  ].join(" ");
+  await db.query(storeWebsitePageSql({
+    operationId: website.operationId,
+    content: websiteContent
+  }));
+  await db.query(`select complete_website_research_operation(
+    '${website.operationId}', '${website.providerAttemptId}', 200,
+    '{"creditsUsed":2}'::jsonb, 2, now(), now()
+  )`);
+  await db.query(settleProviderSql({
+    ...website,
+    providerAttemptId: null,
+    outcome: "succeeded",
+    classification: null,
+    safeCode: null,
+    safeSummary: null,
+    retryAt: "null"
+  }));
+
+  const profile = await beginLeasedProviderOperation(db, {
+    workflowId: context.workflowId,
+    kind: "company_profile_extraction",
+    provider: "openai",
+    owner: `captured-profile-${seed}`,
+    suffix: `captured-profile-${seed}`,
+    cost: 25
+  });
+  const profileOutput = syntheticCompanyProfile(`https://${domain}/`);
+  const responseText = JSON.stringify(profileOutput);
+  const capture = await db.query<{ artifact: { id: string } }>(`
+    select capture_v3_analysis_response(
+      '${profile.operationId}', '${profile.providerAttemptId}',
+      'resp-captured-${seed}', 'request-captured-${seed}', 'completed',
+      'gpt-test', 'company-profile-v2', 'company-profile-schema-v2',
+      now(), now(),
+      '{"inputTokens":100,"outputTokens":25,"totalTokens":125,"cachedInputTokens":0}'::jsonb,
+      1, ${sqlLiteral(responseText)}, null, null, null, true,
+      '{"outputItemTypes":["message"],"messageStatuses":["completed"],"storedForRecovery":true,"outputTruncated":false}'::jsonb,
+      now()
+    ) artifact
+  `);
+  const artifactId = capture.rows[0]!.artifact.id;
+  await db.query(`select record_v3_analysis_processing_result(
+    '${artifactId}', 'parse', 'succeeded', null, null, null, now()
+  )`);
+  const persisted = await db.query<{ profile: { profileVersionId: string } }>(`
+    select persist_company_profile(
+      '${profile.operationId}', '${profile.providerAttemptId}', 'gpt-test',
+      'resp-captured-${seed}', 'company-profile-v2',
+      '${sha256(`captured-profile-input:${seed}`)}',
+      '${sha256(responseText)}', 100, 25, 125,
+      '{"inputTokens":100,"outputTokens":25,"totalTokens":125,"cachedInputTokens":0}'::jsonb,
+      25, 1, now(), ${sqlJson(profileOutput)}, now(),
+      now() + interval '48 hours', now()
+    ) profile
+  `);
+  await db.query(`select record_v3_analysis_processing_result(
+    '${artifactId}', 'complete', 'succeeded', null, null, null, now()
+  )`);
+  return {
+    ...context,
+    profile,
+    artifactId,
+    profileVersionId: persisted.rows[0]!.profile.profileVersionId,
+    outputReference: `company-profile:${persisted.rows[0]!.profile.profileVersionId}`
+  };
 }
 
 async function beginWebsiteOperation(
