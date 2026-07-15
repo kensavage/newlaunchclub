@@ -12,7 +12,10 @@ import {
 import { resolveWorkflowWakeupOrigin, WORKFLOW_WAKEUP_PATH } from "@/lib/workflow/wakeup-runtime";
 
 const root = process.cwd();
-const migration = readFileSync(path.join(root, "supabase/migrations/0004_v3_supabase_queue.sql"), "utf8");
+const migration = [
+  "0004_v3_supabase_queue.sql",
+  "0009_v3_queue_state_preservation.sql"
+].map((name) => readFileSync(path.join(root, "supabase/migrations", name), "utf8")).join("\n");
 const backgroundFunction = readFileSync(path.join(root, "netlify/functions/v3-report-workflow-background.mts"), "utf8");
 const scheduledFunction = readFileSync(path.join(root, "netlify/functions/wake-v3-report-workflows.mts"), "utf8");
 const intakeRoute = readFileSync(path.join(root, "src/app/api/reports/route.ts"), "utf8");
@@ -29,6 +32,9 @@ describe("workflow queue security boundaries", () => {
     expect(migration).not.toContain("pgmq_public");
     expect(migration).toContain("revoke all on schema pgmq from public, anon, authenticated");
     expect(migration).toContain("grant execute on function public.read_v3_workflow_messages(integer, integer) to service_role");
+    expect(migration).toContain("reconcile_v3_workflow_queue_state");
+    expect(migration).toContain("grant execute on function public.reconcile_v3_workflow_queue_state(uuid, timestamptz)");
+    expect(migration).toContain("revoke execute on function public.reconcile_v3_workflow_queue_state(uuid, timestamptz)");
     expect(migration).not.toMatch(/grant[^;]+(?:anon|authenticated)/i);
   });
 

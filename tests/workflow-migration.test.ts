@@ -24,7 +24,8 @@ describe("V3 isolated PostgreSQL migration stack", () => {
       "0005_v3_provider_research_evidence.sql",
       "0006_v3_provider_failure_settlement.sql",
       "0007_v3_openai_response_recovery_context_selection.sql",
-      "0008_v3_idempotent_provider_settlement.sql"
+      "0008_v3_idempotent_provider_settlement.sql",
+      "0009_v3_queue_state_preservation.sql"
     ]) {
       let sql = await readFile(path.join(process.cwd(), "supabase/migrations", name), "utf8");
       if (name.startsWith("0001")) sql = sql.replace("create extension if not exists pgcrypto;", "");
@@ -89,6 +90,186 @@ describe("V3 isolated PostgreSQL migration stack", () => {
 
     const payload = (await db.query<{ payload: unknown }>("select payload from outbox_events limit 1")).rows[0]!.payload;
     await expect(db.query(`select enqueue_v3_workflow_message('${JSON.stringify({ ...(payload as object), email: "no@example.com" }).replaceAll("'", "''")}'::jsonb, 'invalid-extra', now())`)).rejects.toThrow(/workflow_queue_payload_invalid/);
+  });
+
+  it("preserves search-intelligence readiness across repeated and concurrent duplicate enqueue", async () => {
+    await db.exec("begin");
+    try {
+      const context = await setupProviderWorkflow(db, "queue-ready.example", "q");
+      await db.exec(`
+        update research_steps
+        set status = 'succeeded', completed_at = now(), updated_at = now()
+        where workflow_id = '${context.workflowId}';
+        update research_workflows
+        set status = 'ready_for_search_intelligence', current_phase = 'search_intelligence', updated_at = now()
+        where id = '${context.workflowId}';
+      `);
+      const payload = (await db.query<{ payload: unknown }>(`
+        select payload from outbox_events
+        where aggregate_id = '${context.workflowId}' order by created_at desc limit 1
+      `)).rows[0]!.payload;
+      const before = (await db.query<{
+        outbox: number;
+        queued: number;
+        queue_events: number;
+        attempts: number;
+        operations: number;
+        artifacts: number;
+        profiles: number;
+        query_sets: number;
+        costs: number;
+      }>(`
+        select
+          (select count(*)::integer from outbox_events where aggregate_id = '${context.workflowId}') outbox,
+          (select count(*)::integer from pgmq.q_v3_report_workflows where message ->> 'workflowId' = '${context.workflowId}') queued,
+          (select count(*)::integer from workflow_events where workflow_id = '${context.workflowId}' and event_type = 'queue_message_enqueued') queue_events,
+          (select count(*)::integer from research_attempts where workflow_id = '${context.workflowId}') attempts,
+          (select count(*)::integer from provider_operations where workflow_id = '${context.workflowId}') operations,
+          (select count(*)::integer from research_artifacts a join provider_operations o on o.id = a.provider_operation_id where o.workflow_id = '${context.workflowId}') artifacts,
+          (select count(*)::integer from company_profile_versions where workflow_id = '${context.workflowId}') profiles,
+          (select count(*)::integer from search_query_sets where workflow_id = '${context.workflowId}') query_sets,
+          (select count(*)::integer from report_cost_entries where workflow_id = '${context.workflowId}') costs
+      `)).rows[0]!;
+      const progressBefore = (await db.query<{ progress: { state: string } }>(`
+        select get_public_workflow_progress('${context.reportRequestId}') progress
+      `)).rows[0]!.progress;
+      expect(progressBefore.state).toBe("research_ready");
+
+      const enqueue = () => db.query<{ result: { messageId: string } }>(`
+        select enqueue_v3_workflow_message(
+          ${sqlJson(payload)}, 'queue-state-preservation:${context.workflowId}', now()
+        ) result
+      `);
+      const first = await enqueue();
+      const [second, third] = await Promise.all([enqueue(), enqueue()]);
+      expect(second.rows[0]?.result.messageId).toBe(first.rows[0]?.result.messageId);
+      expect(third.rows[0]?.result.messageId).toBe(first.rows[0]?.result.messageId);
+
+      const after = (await db.query<{
+        status: string;
+        phase: string;
+        outbox: number;
+        queued: number;
+        queue_events: number;
+        reconciliation_events: number;
+        attempts: number;
+        operations: number;
+        artifacts: number;
+        profiles: number;
+        query_sets: number;
+        costs: number;
+      }>(`
+        select
+          (select status from research_workflows where id = '${context.workflowId}') status,
+          (select current_phase from research_workflows where id = '${context.workflowId}') phase,
+          (select count(*)::integer from outbox_events where aggregate_id = '${context.workflowId}') outbox,
+          (select count(*)::integer from pgmq.q_v3_report_workflows where message ->> 'workflowId' = '${context.workflowId}') queued,
+          (select count(*)::integer from workflow_events where workflow_id = '${context.workflowId}' and event_type = 'queue_message_enqueued') queue_events,
+          (select count(*)::integer from workflow_events where workflow_id = '${context.workflowId}' and event_type = 'workflow_queue_state_reconciled') reconciliation_events,
+          (select count(*)::integer from research_attempts where workflow_id = '${context.workflowId}') attempts,
+          (select count(*)::integer from provider_operations where workflow_id = '${context.workflowId}') operations,
+          (select count(*)::integer from research_artifacts a join provider_operations o on o.id = a.provider_operation_id where o.workflow_id = '${context.workflowId}') artifacts,
+          (select count(*)::integer from company_profile_versions where workflow_id = '${context.workflowId}') profiles,
+          (select count(*)::integer from search_query_sets where workflow_id = '${context.workflowId}') query_sets,
+          (select count(*)::integer from report_cost_entries where workflow_id = '${context.workflowId}') costs
+      `)).rows[0]!;
+      expect(after).toEqual({
+        status: "ready_for_search_intelligence",
+        phase: "search_intelligence",
+        outbox: before.outbox + 1,
+        queued: before.queued + 1,
+        queue_events: before.queue_events + 1,
+        reconciliation_events: 0,
+        attempts: before.attempts,
+        operations: before.operations,
+        artifacts: before.artifacts,
+        profiles: before.profiles,
+        query_sets: before.query_sets,
+        costs: before.costs
+      });
+
+      await db.exec(`
+        update research_workflows
+        set status = 'dispatch_pending', current_phase = 'website_research'
+        where id = '${context.workflowId}'
+      `);
+      await db.query(`select reconcile_v3_workflow_queue_state('${context.workflowId}', now())`);
+      await db.query(`select reconcile_v3_workflow_queue_state('${context.workflowId}', now())`);
+      const repaired = (await db.query<{ status: string; phase: string; events: number; public_state: string }>(`
+        select
+          (select status from research_workflows where id = '${context.workflowId}') status,
+          (select current_phase from research_workflows where id = '${context.workflowId}') phase,
+          (select count(*)::integer from workflow_events where workflow_id = '${context.workflowId}' and event_type = 'workflow_queue_state_reconciled') events,
+          (select get_public_workflow_progress('${context.reportRequestId}') ->> 'state') public_state
+      `)).rows[0]!;
+      expect(repaired).toEqual({
+        status: "ready_for_search_intelligence",
+        phase: "search_intelligence",
+        events: 1,
+        public_state: "research_ready"
+      });
+
+      await expectSqlFailure(db, "queue_reconcile_anon", async () => {
+        await db.exec("set local role anon");
+        return db.query(`select reconcile_v3_workflow_queue_state('${context.workflowId}', now())`);
+      }, /permission denied/i);
+      await db.exec("reset role");
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("derives runnable, retry, handoff, and protected states from durable steps", async () => {
+    await db.exec("begin");
+    try {
+      const context = await setupProviderWorkflow(db, "queue-rules.example", "r");
+      await db.exec(`
+        update research_workflows
+        set status = 'ready_for_search_intelligence', current_phase = 'search_intelligence'
+        where id = '${context.workflowId}'
+      `);
+      let state: { status: string; currentPhase?: string } = (await db.query<{ result: { status: string; currentPhase: string } }>(`
+        select reconcile_v3_workflow_queue_state('${context.workflowId}', '2030-01-01T00:00:00Z') result
+      `)).rows[0]!.result;
+      expect(state).toMatchObject({ status: "dispatch_pending", currentPhase: "website_research" });
+
+      await db.exec(`
+        update research_steps set status = 'retry_scheduled', scheduled_at = '2030-01-02T00:00:00Z'
+        where workflow_id = '${context.workflowId}' and step_key = 'website_research'
+      `);
+      state = (await db.query<{ result: { status: string } }>(`
+        select reconcile_v3_workflow_queue_state('${context.workflowId}', '2030-01-01T00:00:00Z') result
+      `)).rows[0]!.result;
+      expect(state.status).toBe("waiting_retry");
+      state = (await db.query<{ result: { status: string } }>(`
+        select reconcile_v3_workflow_queue_state('${context.workflowId}', '2030-01-03T00:00:00Z') result
+      `)).rows[0]!.result;
+      expect(state.status).toBe("dispatch_pending");
+
+      for (const protectedStatus of ["paused", "cancelled", "failed", "completed", "partially_complete"]) {
+        await db.exec(`update research_workflows set status = '${protectedStatus}' where id = '${context.workflowId}'`);
+        state = (await db.query<{ result: { status: string } }>(`
+          select reconcile_v3_workflow_queue_state('${context.workflowId}', '2030-01-03T00:00:00Z') result
+        `)).rows[0]!.result;
+        expect(state.status).toBe(protectedStatus);
+      }
+
+      await db.exec(`
+        update research_steps set status = 'succeeded', completed_at = now()
+        where workflow_id = '${context.workflowId}';
+        update research_workflows set status = 'running', current_phase = 'search_query_discovery'
+        where id = '${context.workflowId}'
+      `);
+      state = (await db.query<{ result: { status: string; currentPhase: string } }>(`
+        select reconcile_v3_workflow_queue_state('${context.workflowId}', now()) result
+      `)).rows[0]!.result;
+      expect(state).toMatchObject({
+        status: "ready_for_search_intelligence",
+        currentPhase: "search_intelligence"
+      });
+    } finally {
+      await db.exec("rollback");
+    }
   });
 
   it("rolls the entire intake transaction back when pgmq send fails", async () => {

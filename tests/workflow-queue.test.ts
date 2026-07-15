@@ -9,7 +9,12 @@ import {
 } from "@/lib/workflow/queue";
 import { WorkflowQueueConsumer } from "@/lib/workflow/queue-consumer";
 import { DurableWorkflowRunner } from "@/lib/workflow/runner";
-import type { FailureClassification, WorkflowStepKey } from "@/lib/workflow/schema";
+import {
+  ALL_WORKFLOW_STEPS,
+  type FailureClassification,
+  type WorkflowStatus,
+  type WorkflowStepKey
+} from "@/lib/workflow/schema";
 import {
   createWorkflowWakeupHeaders,
   verifyWorkflowWakeupRequest,
@@ -88,6 +93,84 @@ describe("Supabase Queue workflow transport", () => {
     expect((await store.getWorkflow(workflow.id))?.status).toBe("ready_for_provider_research");
     expect((await store.getWorkflowDetail(workflow.id))!.steps.every((step) => step.attemptCount === 1)).toBe(true);
     expect(queue.snapshot().messages.every((message) => message.archived)).toBe(true);
+  });
+
+  it("repairs stale queue state and archives repeated no-work deliveries without duplicate work", async () => {
+    let now = start;
+    const { store, workflow, payload } = await setup();
+    await advanceToSearchIntelligence(store, workflow.id, () => now);
+    const progressBefore = await store.getPublicProgress(reportRequestId);
+    const detailBefore = (await store.getWorkflowDetail(workflow.id))!;
+    const queue = new MemoryWorkflowQueue(() => now);
+    await queue.enqueue(payload, "ready-duplicate");
+    queue.seedUnsafeMessageForTests(payload);
+
+    const staleWorkflow = (await store.getWorkflow(workflow.id))!;
+    staleWorkflow.status = "dispatch_pending";
+    staleWorkflow.currentPhase = "website_research";
+    const consumer = new WorkflowQueueConsumer(store, queue, { now: () => now, batchSize: 2 });
+    await consumer.consume();
+    now = new Date(now.getTime() + 2_000);
+    await consumer.consume();
+
+    const detailAfter = (await store.getWorkflowDetail(workflow.id))!;
+    expect(detailAfter.workflow).toMatchObject({
+      status: "ready_for_search_intelligence",
+      currentPhase: "search_intelligence"
+    });
+    expect(await store.getPublicProgress(reportRequestId)).toEqual(progressBefore);
+    expect(detailAfter.attempts).toEqual(detailBefore.attempts);
+    expect(detailAfter.costEntries).toEqual(detailBefore.costEntries);
+    expect(detailAfter.events.filter((event) => event.eventType === "step_succeeded")).toHaveLength(8);
+    expect(detailAfter.events.filter((event) => event.eventType === "workflow_queue_state_reconciled")).toHaveLength(1);
+    expect(queue.snapshot().messages.every((message) => message.archived)).toBe(true);
+    expect(queue.snapshot().deadLetters).toHaveLength(0);
+  });
+
+  it("reconciles pending and retry-eligible work while preserving administrator and terminal states", async () => {
+    const { store, workflow } = await setup();
+    const detail = (await store.getWorkflowDetail(workflow.id))!;
+    const firstStep = detail.steps[0]!;
+
+    workflow.status = "ready_for_search_intelligence";
+    workflow.currentPhase = "search_intelligence";
+    expect(await store.reconcileQueueState(workflow.id, start.toISOString())).toMatchObject({
+      status: "dispatch_pending",
+      currentPhase: "initialize_workflow"
+    });
+
+    firstStep.status = "retry_scheduled";
+    firstStep.scheduledAt = new Date(start.getTime() + 60_000).toISOString();
+    expect((await store.reconcileQueueState(workflow.id, start.toISOString())).status).toBe("waiting_retry");
+    expect((await store.reconcileQueueState(
+      workflow.id,
+      new Date(start.getTime() + 60_001).toISOString()
+    )).status).toBe("dispatch_pending");
+
+    for (const status of ["paused", "cancelled", "failed", "completed", "partially_complete"] as WorkflowStatus[]) {
+      workflow.status = status;
+      expect((await store.reconcileQueueState(workflow.id, start.toISOString())).status).toBe(status);
+    }
+
+    firstStep.status = "failed_terminal";
+    workflow.status = "running";
+    expect((await store.reconcileQueueState(workflow.id, start.toISOString())).status).toBe("failed");
+  });
+
+  it("archives completed and partially complete duplicate deliveries without executing steps", async () => {
+    for (const status of ["completed", "partially_complete"] as WorkflowStatus[]) {
+      resetMemoryWorkflowStoreForTests();
+      const { store, workflow, payload } = await setup();
+      workflow.status = status;
+      const queue = new MemoryWorkflowQueue(() => start);
+      await queue.enqueue(payload, `protected-${status}`);
+      const result = await new WorkflowQueueConsumer(store, queue, { now: () => start }).consume();
+
+      expect(result.archived).toBe(1);
+      expect((await store.getWorkflow(workflow.id))?.status).toBe(status);
+      expect((await store.getWorkflowDetail(workflow.id))!.attempts).toHaveLength(0);
+      expect(queue.snapshot().messages[0]?.archived).toBe(true);
+    }
   });
 
   it("defers transient failures, exhausts retries, and records one safe dead letter", async () => {
@@ -210,6 +293,53 @@ async function setup() {
   }, start.toISOString());
   const payload = store.snapshot().outbox[0]!.payload;
   return { store, workflow, payload };
+}
+
+async function advanceToSearchIntelligence(
+  store: MemoryWorkflowStore,
+  workflowId: string,
+  now: () => Date
+) {
+  for (const stepKey of ALL_WORKFLOW_STEPS.slice(0, 5)) {
+    await completeMemoryStep(store, workflowId, stepKey, now);
+  }
+  await store.prepareProviderResearchContinuation({
+    workflowId,
+    websiteEstimatedCostCents: 0,
+    profileEstimatedCostCents: 0,
+    queryEstimatedCostCents: 0,
+    maximumAttempts: 4,
+    now: now().toISOString()
+  });
+  for (const stepKey of ALL_WORKFLOW_STEPS.slice(5)) {
+    await completeMemoryStep(store, workflowId, stepKey, now);
+  }
+}
+
+async function completeMemoryStep(
+  store: MemoryWorkflowStore,
+  workflowId: string,
+  stepKey: WorkflowStepKey,
+  now: () => Date
+) {
+  const owner = `queue-test:${stepKey}`;
+  const lease = await store.beginStep({
+    workflowId,
+    stepKey,
+    owner,
+    leaseSeconds: 120,
+    now: now().toISOString()
+  });
+  expect(lease.disposition).toBe("acquired");
+  expect(lease.lease).not.toBeNull();
+  expect(await store.completeStep({
+    workflowId,
+    stepKey,
+    owner,
+    fencingToken: lease.lease!.fencingToken,
+    outputReference: `queue-test:${stepKey}`,
+    now: now().toISOString()
+  })).toBe(true);
 }
 
 function failingRunner(

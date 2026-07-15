@@ -97,6 +97,7 @@ export interface WorkflowStore {
     maximumAttempts: number;
     now?: string;
   }): Promise<boolean>;
+  reconcileQueueState(workflowId: string, now?: string): Promise<WorkflowRecord>;
 
   claimOutbox(input: {
     owner: string;

@@ -89,6 +89,13 @@ export class SupabaseWorkflowStore implements WorkflowStore {
     });
   }
 
+  async reconcileQueueState(workflowId: string, now = new Date().toISOString()) {
+    return this.rpcJson<WorkflowRecord>("reconcile_v3_workflow_queue_state", {
+      p_workflow_id: workflowId,
+      p_now: now
+    });
+  }
+
   async claimOutbox({ owner, limit, leaseSeconds, now = new Date().toISOString() }: {
     owner: string; limit: number; leaseSeconds: number; now?: string;
   }) {

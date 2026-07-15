@@ -326,6 +326,64 @@ export class MemoryWorkflowStore implements WorkflowStore {
     });
   }
 
+  async reconcileQueueState(workflowId: string, now = new Date().toISOString()) {
+    return this.withLock(async () => {
+      const workflow = this.requireWorkflow(workflowId);
+      if (["paused", "cancelled", "failed", "completed", "partially_complete"].includes(workflow.status)) {
+        return workflow;
+      }
+
+      const steps = this.stepsFor(workflowId);
+      const nextStep = steps.find((step) => step.status !== "succeeded" && step.status !== "skipped");
+      let nextStatus = workflow.status;
+      let nextPhase = workflow.currentPhase;
+
+      if (nextStep) {
+        nextPhase = nextStep.stepKey;
+        if (nextStep.status === "pending") nextStatus = "dispatch_pending";
+        if (nextStep.status === "leased" || nextStep.status === "running") nextStatus = "running";
+        if (nextStep.status === "retry_scheduled") {
+          nextStatus = Date.parse(nextStep.scheduledAt) <= Date.parse(now)
+            ? "dispatch_pending"
+            : "waiting_retry";
+        }
+        if (nextStep.status === "failed_terminal") nextStatus = "failed";
+        if (nextStep.status === "cancelled") nextStatus = "cancelled";
+      } else if (steps.length > 0 && steps.every((step) => step.status === "succeeded")) {
+        if (steps.some((step) => step.stepKey === "search_query_discovery")) {
+          nextStatus = "ready_for_search_intelligence";
+          nextPhase = "search_intelligence";
+        } else if (steps.some((step) => step.stepKey === "mark_ready_for_provider_research")) {
+          nextStatus = "ready_for_provider_research";
+          nextPhase = "provider_research";
+        }
+      }
+
+      if (nextStatus !== workflow.status || nextPhase !== workflow.currentPhase) {
+        const previousStatus = workflow.status;
+        const previousPhase = workflow.currentPhase;
+        workflow.status = nextStatus;
+        workflow.currentPhase = nextPhase;
+        if (nextStatus === "cancelled") workflow.cancelledAt ??= now;
+        workflow.updatedAt = now;
+        this.addEvent(
+          workflow.id,
+          "workflow_queue_state_reconciled",
+          workflow.id,
+          "orchestrator",
+          {
+            fromStatus: previousStatus,
+            toStatus: nextStatus,
+            fromPhase: previousPhase,
+            toPhase: nextPhase
+          },
+          now
+        );
+      }
+      return workflow;
+    });
+  }
+
   async claimOutbox({ owner, limit, leaseSeconds, now = new Date().toISOString() }: {
     owner: string;
     limit: number;

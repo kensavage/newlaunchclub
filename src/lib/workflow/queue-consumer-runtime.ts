@@ -142,6 +142,20 @@ export class WorkflowQueueConsumer {
       return "dead_lettered";
     }
 
+    await this.store.reconcileQueueState(parsed.workflowId, this.now().toISOString());
+    detail = await this.store.getWorkflowDetail(parsed.workflowId);
+    if (!detail) {
+      await this.queue.deadLetter({
+        messageId: message.messageId,
+        workflowId: parsed.workflowId,
+        classification: "configuration_error",
+        readCount: message.readCount,
+        attemptCount: 0,
+        lastSafeError: "The canonical workflow could not be reconciled."
+      });
+      return "dead_lettered";
+    }
+
     if (detail.workflow.status === "cancelled" || detail.workflow.status === "paused") {
       await this.queue.archive(message.messageId);
       return "archived";
@@ -160,7 +174,11 @@ export class WorkflowQueueConsumer {
         return "deferred";
       }
     }
-    if (detail.workflow.status === "ready_for_search_intelligence" || detail.workflow.status === "completed") {
+    if (
+      detail.workflow.status === "ready_for_search_intelligence" ||
+      detail.workflow.status === "completed" ||
+      detail.workflow.status === "partially_complete"
+    ) {
       await this.queue.archive(message.messageId);
       return "archived";
     }
@@ -225,7 +243,11 @@ export class WorkflowQueueConsumer {
         return "deferred";
       }
     }
-    if (detail?.workflow.status === "ready_for_search_intelligence" || detail?.workflow.status === "completed") {
+    if (
+      detail?.workflow.status === "ready_for_search_intelligence" ||
+      detail?.workflow.status === "completed" ||
+      detail?.workflow.status === "partially_complete"
+    ) {
       await this.queue.archive(message.messageId);
       return "archived";
     }
