@@ -88,19 +88,38 @@ The existing `npm run research:admin` CLI continues to support `list`, `show`, `
 
 PR4 adds `reconcile-provider OPERATION_ID RESOLUTION [--actual-cents N] [--yes]`, where `RESOLUTION` is `definitively_rejected`, `accepted_retryable`, or `paid_cancelled`. The command requires administrator authentication and interactive confirmation unless `--yes` is supplied. Every decision is appended to the immutable provider reconciliation ledger. `definitively_rejected` releases the reservation, `accepted_retryable` resumes polling the stored provider job without a new submission, and `paid_cancelled` settles the supplied actual cost before releasing the remainder. Only `paid_cancelled` accepts `--actual-cents`.
 
+## Migration Chain
+
+The complete tracked V3 migration chain is:
+
+1. `0001_ai_search_report_tables.sql`
+2. `0002_v3_identity_intake_access.sql`
+3. `0003_v3_durable_workflow.sql`
+4. `0004_v3_supabase_queue.sql`
+5. `0005_v3_provider_research_evidence.sql`
+6. `0006_v3_provider_failure_settlement.sql`
+7. `0007_v3_openai_response_recovery_context_selection.sql`
+8. `0008_v3_idempotent_provider_settlement.sql`
+9. `0009_v3_queue_state_preservation.sql`
+10. `0010_v3_public_progress_handoff.sql`
+
+Apply the chain in that order when creating a fresh isolated development or preview database. Migrations `0008` through `0010` provide settlement replay safety, queue-state preservation, and truthful public progress. Never blindly rerun migrations in an existing environment. If migration history is missing or unreliable, first prove schema equivalence and obtain approval for a migration plan; migration-history repair is a separate operation and must not be performed casually.
+
 ## Local Testing
 
-Unit tests use `MemoryWorkflowQueue` and the existing memory workflow store. PostgreSQL migration tests run migrations `0001` through `0007` in disposable PGlite and provide a local implementation of the official `pgmq.send`, `read`, `set_vt`, and `archive` contracts. They verify atomic rollback, logged queue configuration, visibility redelivery, strict payloads, leases, fencing, dead letters, provider-response recovery, context selection, exact cost settlement, RLS, and administrator retry without connecting to hosted Supabase.
+Unit tests use `MemoryWorkflowQueue` and the existing memory workflow store. PostgreSQL migration tests run the complete `0001` through `0010` chain in disposable PGlite and provide a local implementation of the official `pgmq.send`, `read`, `set_vt`, and `archive` contracts. They verify atomic rollback, logged queue configuration, visibility redelivery, strict payloads, leases, fencing, dead letters, provider-response recovery, context selection, exact cost settlement, queue-state preservation, truthful public progress, RLS, and administrator retry without connecting to hosted Supabase.
 
 ## Deploy Preview
 
-Use a dedicated development Supabase project and a Netlify Deploy Preview with preview-only credentials. Apply migrations `0001`, `0002`, `0003`, and `0004` in order to that database. Confirm the queue is Basic/logged, `pgmq_public` is disabled, memory storage is false, and no production URL, key, data, domain, or function is referenced.
+Use a dedicated development Supabase project and a Netlify Deploy Preview with preview-only credentials restricted to Deploy Preview Functions. For a fresh isolated database, apply the complete `0001` through `0010` chain above in tracked order. For an existing preview database, verify installed migrations and schema equivalence before using a separately approved migration plan; do not rerun installed migrations or repair migration history casually. Keep `REPORT_USE_MOCK_PROVIDERS=true`, confirm the queue is Basic/logged, `pgmq_public` is disabled, memory storage is false, and confirm no production URL, key, data, domain, or function is referenced.
+
+The accepted PR4 handoff is `ready_for_search_intelligence`. PR4 does not perform search intelligence or generate the final report.
 
 Invoke the scheduled wakeup manually with **Run now**. Verify one intake creates one workflow, five steps, one 400-cent budget, one active queue message, and a sent outbox ledger row. Complete duplicate, crash, transient, permanent, dead-letter, pause, resume, cancel, expired-lease, HMAC replay, progress, and V2 compatibility acceptance before PR4.
 
 ## Production Activation
 
-Production activation requires a separate approval after preview acceptance. Before deployment, create and retain production-only `WORKFLOW_WAKEUP_SECRET` and `WORKFLOW_ADMIN_SECRET`, apply `0004`, verify queue grants, inspect the function bundle, verify queue monitoring, and explicitly approve the scheduled function deployment. Do not run the queue consumer and any former Async Workloads consumer simultaneously.
+Production activation requires separate authorization and a production-readiness plan after preview acceptance; a passing Deploy Preview does not declare production ready. Netlify treats `main` as the production branch, so merging to `main` is operationally coupled to an automatic production deployment. Before any authorized activation, prove schema equivalence and migration state, plan the complete `0001` through `0010` chain without rerunning installed migrations, verify queue grants and monitoring, inspect the function bundle, and explicitly approve the release. Do not run the queue consumer and any former Async Workloads consumer simultaneously.
 
 ## Monitoring And Cleanup
 
