@@ -9,16 +9,18 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:functions": "vitest run tests/netlify-function-runtime.test.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "env:check": "node scripts/check-provider-env.mjs",
     "env:check:strict": "node scripts/check-provider-env.mjs --strict",
     "smoke:providers": "node scripts/smoke-providers.mjs",
     "smoke:providers:credits": "node scripts/smoke-providers.mjs --spend-credits",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "research:admin": "NODE_OPTIONS=--conditions=react-server tsx scripts/research-admin.ts"
   },
   "dependencies": {
-    "@netlify/functions": "^4.3.0",
+    "@netlify/functions": "^5.3.0",
     "@remotion/player": "4.0.485",
     "@supabase/supabase-js": "^2.107.0",
     "lucide-react": "^1.21.0",
@@ -31,7 +33,9 @@
     "zod": "^4.2.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.3.14",
     "@netlify/plugin-nextjs": "^5.15.11",
+    "@netlify/zip-it-and-ship-it": "^15.2.0",
     "@playwright/test": "^1.57.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
@@ -42,6 +46,7 @@
     "eslint": "^9.39.1",
     "eslint-config-next": "^16.2.10",
     "jsdom": "^27.2.0",
+    "tsx": "^4.20.6",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },

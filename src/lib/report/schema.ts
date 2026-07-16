@@ -1,11 +1,78 @@
 import { z } from "zod";
 
+export const evidenceStatusSchema = z.enum([
+  "Measured",
+  "Estimated",
+  "Inferred",
+  "Unavailable",
+  "Not measured"
+]);
+
+export const evidenceReferenceSchema = z.object({
+  referenceId: z.string().min(1),
+  provider: z.string().min(1),
+  sourceUrl: z.string().url().nullable(),
+  observationDate: z.string().datetime(),
+  description: z.string().min(1)
+});
+
+const evidenceMetadataShape = {
+  evidenceStatus: evidenceStatusSchema,
+  evidenceReferences: z.array(evidenceReferenceSchema),
+  observationDate: z.string().datetime().nullable(),
+  sourceProvider: z.string().min(1).nullable(),
+  confidence: z.number().min(0).max(1).nullable(),
+  publicExplanation: z.string().min(1)
+};
+
+function requireMeasuredEvidence(
+  value: {
+    evidenceStatus: z.infer<typeof evidenceStatusSchema>;
+    evidenceReferences: z.infer<typeof evidenceReferenceSchema>[];
+    observationDate: string | null;
+    sourceProvider: string | null;
+  },
+  context: z.RefinementCtx
+) {
+  if (
+    value.evidenceStatus === "Measured" &&
+    (!value.evidenceReferences.length || !value.observationDate || !value.sourceProvider)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "Measured data requires evidence references, an observation date, and a source provider."
+    });
+  }
+}
+
+export const evidenceMetadataSchema = z
+  .object(evidenceMetadataShape)
+  .superRefine(requireMeasuredEvidence);
+
+export const reportClaimSchema = z
+  .object({
+    claimId: z.string().min(1),
+    claimText: z.string().min(1),
+    ...evidenceMetadataShape
+  })
+  .superRefine(requireMeasuredEvidence);
+
 export const reportStatusSchema = z.enum(["queued", "running", "complete", "failed"]);
+export const publicProgressStateSchema = z.enum([
+  "queued",
+  "preparing_research",
+  "research_ready",
+  "temporarily_delayed",
+  "partially_complete",
+  "complete",
+  "failed"
+]);
 export const reportStepIdSchema = z.enum([
   "queued",
   "crawl",
   "analysis",
   "keywords",
+  "research_ready",
   "reddit",
   "ai-search",
   "synthesis",
@@ -39,7 +106,14 @@ export const keywordOpportunitySchema = z.object({
   sourceVisibility: z.string(),
   redditFit: z.enum(["High", "Medium", "Low"]),
   priority: z.enum(["High", "Medium", "Low"]),
-  recommendedAction: z.string()
+  recommendedAction: z.string(),
+  evidence: z.object({
+    monthlySearchVolume: evidenceMetadataSchema,
+    difficulty: evidenceMetadataSchema,
+    trafficPotential: evidenceMetadataSchema,
+    intent: evidenceMetadataSchema,
+    analysis: evidenceMetadataSchema
+  })
 });
 
 export const redditOpportunitySchema = z.object({
@@ -47,14 +121,21 @@ export const redditOpportunitySchema = z.object({
   subreddit: z.string(),
   url: z.string(),
   estimatedMonthlyViews: z.number().nullable(),
-  upvoteCount: z.number(),
-  commentCount: z.number(),
+  upvoteCount: z.number().nullable(),
+  commentCount: z.number().nullable(),
   engagementSummary: z.string(),
   discussionSummary: z.string(),
   whyLowHangingFruit: z.string(),
   suggestedPostTitle: z.string(),
   suggestedPostBody: z.string(),
-  riskLevel: z.enum(["Low", "Medium", "High"])
+  riskLevel: z.enum(["Low", "Medium", "High"]),
+  evidence: z.object({
+    discussion: evidenceMetadataSchema,
+    monthlyViews: evidenceMetadataSchema,
+    upvotes: evidenceMetadataSchema,
+    comments: evidenceMetadataSchema,
+    analysis: evidenceMetadataSchema
+  })
 });
 
 export const competitorGapSchema = z.object({
@@ -62,23 +143,26 @@ export const competitorGapSchema = z.object({
   source: z.string(),
   url: z.string().nullable(),
   gap: z.string(),
-  recommendedAction: z.string()
+  recommendedAction: z.string(),
+  evidence: evidenceMetadataSchema
 });
 
 export const aiCitationOpportunitySchema = z.object({
   prompt: z.string(),
   sampleAnswer: z.string(),
   citationAngle: z.string(),
-  isSimulation: z.boolean()
+  isSimulation: z.literal(true),
+  evidence: evidenceMetadataSchema
 });
 
 export const visibilitySnapshotSchema = z.object({
-  currentAiVisibilityScore: z.number().min(0).max(100),
-  targetAiVisibilityScore: z.number().min(0).max(100),
-  currentRedditPresenceScore: z.number().min(0).max(100),
-  targetRedditPresenceScore: z.number().min(0).max(100),
+  currentAiVisibilityScore: z.number().min(0).max(100).nullable(),
+  targetAiVisibilityScore: z.number().min(0).max(100).nullable(),
+  currentRedditPresenceScore: z.number().min(0).max(100).nullable(),
+  targetRedditPresenceScore: z.number().min(0).max(100).nullable(),
   estimatedMonthlyOpportunityTraffic: z.number().nullable(),
-  summary: z.string()
+  summary: z.string(),
+  evidence: evidenceMetadataSchema
 });
 
 export const memeConceptSchema = z.object({
@@ -101,6 +185,7 @@ export const pricingTierSchema = z.object({
 });
 
 export const reportEvidenceSchema = z.object({
+  researchMode: z.enum(["live", "mock"]),
   crawlSummary: z.string(),
   keywordSource: z.string(),
   redditSource: z.string(),
@@ -114,8 +199,10 @@ export const opportunityReportSchema = z.object({
   submittedUrl: z.string(),
   domain: z.string(),
   opportunityScore: z.number().min(0).max(100),
+  opportunityScoreEvidence: evidenceMetadataSchema,
   headline: z.string(),
   business: businessProfileSchema,
+  businessEvidence: evidenceMetadataSchema,
   visibilitySnapshot: visibilitySnapshotSchema,
   keywordOpportunities: z.array(keywordOpportunitySchema).min(1),
   redditOpportunities: z.array(redditOpportunitySchema),
@@ -125,7 +212,8 @@ export const opportunityReportSchema = z.object({
   pricingTiers: z.array(pricingTierSchema).length(3),
   bookingUrl: z.string().min(1),
   nextSteps: z.array(z.string()).min(1),
-  evidenceSummary: reportEvidenceSchema
+  evidenceSummary: reportEvidenceSchema,
+  claims: z.array(reportClaimSchema).min(1)
 });
 
 export const reportJobSchema = z.object({
@@ -144,12 +232,34 @@ export const reportJobSchema = z.object({
   expiresAt: z.string()
 });
 
-export const reportResponseSchema = z.object({
-  job: reportJobSchema,
-  report: opportunityReportSchema.nullable()
+export const publicReportJobSchema = z.object({
+  publicId: z.string(),
+  status: reportStatusSchema,
+  state: publicProgressStateSchema,
+  currentStep: reportStepIdSchema,
+  progress: z.number().min(0).max(100).nullable(),
+  steps: z.array(reportStepSchema),
+  errorSummary: z.string().nullable()
 });
 
+export const publicOpportunityReportSchema = opportunityReportSchema.omit({
+  visibilitySnapshot: true,
+  memeConcepts: true,
+  pricingTiers: true,
+  nextSteps: true
+});
+
+export const reportResponseSchema = z.object({
+  job: publicReportJobSchema,
+  report: publicOpportunityReportSchema.nullable()
+});
+
+export type EvidenceStatus = z.infer<typeof evidenceStatusSchema>;
+export type EvidenceReference = z.infer<typeof evidenceReferenceSchema>;
+export type EvidenceMetadata = z.infer<typeof evidenceMetadataSchema>;
+export type ReportClaim = z.infer<typeof reportClaimSchema>;
 export type ReportStatus = z.infer<typeof reportStatusSchema>;
+export type PublicProgressState = z.infer<typeof publicProgressStateSchema>;
 export type ReportStepId = z.infer<typeof reportStepIdSchema>;
 export type StepStatus = z.infer<typeof stepStatusSchema>;
 export type ReportStep = z.infer<typeof reportStepSchema>;
@@ -163,4 +273,6 @@ export type MemeConcept = z.infer<typeof memeConceptSchema>;
 export type PricingTier = z.infer<typeof pricingTierSchema>;
 export type OpportunityReport = z.infer<typeof opportunityReportSchema>;
 export type ReportJob = z.infer<typeof reportJobSchema>;
+export type PublicReportJob = z.infer<typeof publicReportJobSchema>;
+export type PublicOpportunityReport = z.infer<typeof publicOpportunityReportSchema>;
 export type ReportResponse = z.infer<typeof reportResponseSchema>;

@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { opportunityReportSchema, type OpportunityReport } from "@/lib/report/schema";
+import {
+  createEvidenceReference,
+  createInferredEvidence,
+  createMeasuredEvidence,
+  createNotMeasuredEvidence,
+  createUnavailableEvidence
+} from "@/lib/report/evidence";
+import {
+  evidenceMetadataSchema,
+  evidenceStatusSchema,
+  opportunityReportSchema,
+  reportResponseSchema,
+  reportClaimSchema,
+  type OpportunityReport
+} from "@/lib/report/schema";
 import { normalizeOpportunityReportForResponse } from "@/lib/report/normalize-report";
 import {
   calculateOpportunityScore,
@@ -12,13 +26,53 @@ import {
   getDefaultPricingTiers
 } from "@/lib/report/commercial";
 
+const observedAt = "2026-07-06T12:00:00.000Z";
+const sourceReference = createEvidenceReference({
+  referenceId: "ahrefs-keyword:ai-search-visibility",
+  provider: "Ahrefs",
+  sourceUrl: null,
+  observationDate: observedAt,
+  description: "Ahrefs keyword response."
+});
+const redditReference = createEvidenceReference({
+  referenceId: "reddit-thread:example",
+  provider: "Firecrawl",
+  sourceUrl: "https://www.reddit.com/r/SEO/comments/example/",
+  observationDate: observedAt,
+  description: "Public Reddit result."
+});
+const measuredKeywordEvidence = createMeasuredEvidence({
+  provider: "Ahrefs",
+  observationDate: observedAt,
+  references: [sourceReference],
+  explanation: "Ahrefs returned this metric."
+});
+const inferredKeywordEvidence = createInferredEvidence({
+  provider: "OpenAI analysis of Ahrefs data",
+  observationDate: observedAt,
+  references: [sourceReference],
+  explanation: "This conclusion is inferred from the keyword research."
+});
+const measuredRedditEvidence = createMeasuredEvidence({
+  provider: "Firecrawl",
+  observationDate: observedAt,
+  references: [redditReference],
+  explanation: "Firecrawl returned this public Reddit result."
+});
+
 const validReport: OpportunityReport = {
   publicId: "report123",
-  generatedAt: new Date("2026-07-06T12:00:00.000Z").toISOString(),
+  generatedAt: observedAt,
   submittedUrl: "launchclub.ai",
   domain: "launchclub.ai",
   opportunityScore: 82,
-  headline: "Launch Club has clear AI-search and Reddit opportunity.",
+  opportunityScoreEvidence: createInferredEvidence({
+    provider: "Launch Club deterministic scoring",
+    observationDate: observedAt,
+    references: [sourceReference, redditReference],
+    explanation: "The score is inferred from available report evidence."
+  }),
+  headline: "Launch Club has a clear AI-search and Reddit opportunity.",
   business: {
     companyName: "Launch Club",
     website: "https://launchclub.ai/",
@@ -26,6 +80,20 @@ const validReport: OpportunityReport = {
     primaryKeyword: "AI search visibility",
     summary: "Launch Club helps companies become visible where buyers research."
   },
+  businessEvidence: createInferredEvidence({
+    provider: "OpenAI analysis of Firecrawl content",
+    observationDate: observedAt,
+    references: [
+      createEvidenceReference({
+        referenceId: "website:launchclub",
+        provider: "Firecrawl",
+        sourceUrl: "https://launchclub.ai/",
+        observationDate: observedAt,
+        description: "Crawled website content."
+      })
+    ],
+    explanation: "The business profile is inferred from crawled website content."
+  }),
   visibilitySnapshot: createVisibilitySnapshot({
     opportunityScore: 82,
     redditOpportunities: [],
@@ -41,7 +109,14 @@ const validReport: OpportunityReport = {
       sourceVisibility: "Competitor and third-party sources are more visible.",
       redditFit: "High",
       priority: "High",
-      recommendedAction: "Publish a practical source page and seed a helpful Reddit angle."
+      recommendedAction: "Publish a practical source page and seed a helpful Reddit angle.",
+      evidence: {
+        monthlySearchVolume: measuredKeywordEvidence,
+        difficulty: measuredKeywordEvidence,
+        trafficPotential: measuredKeywordEvidence,
+        intent: inferredKeywordEvidence,
+        analysis: inferredKeywordEvidence
+      }
     }
   ],
   redditOpportunities: [
@@ -49,15 +124,27 @@ const validReport: OpportunityReport = {
       title: "How are teams tracking AI mentions?",
       subreddit: "r/SEO",
       url: "https://www.reddit.com/r/SEO/comments/example/",
-      estimatedMonthlyViews: 3400,
+      estimatedMonthlyViews: null,
       upvoteCount: 21,
       commentCount: 8,
-      engagementSummary: "21 upvotes and 8 comments, used as a directional engagement proxy.",
+      engagementSummary: "Verified engagement counts are available; monthly traffic is not.",
       discussionSummary: "Buyers are asking for practical tools and examples.",
       whyLowHangingFruit: "The thread has active buyer language.",
       suggestedPostTitle: "How are teams measuring AI-search visibility?",
       suggestedPostBody: "A practical discussion prompt with no hard sell.",
-      riskLevel: "Low"
+      riskLevel: "Low",
+      evidence: {
+        discussion: measuredRedditEvidence,
+        monthlyViews: createNotMeasuredEvidence("Monthly Reddit traffic was not measured."),
+        upvotes: measuredRedditEvidence,
+        comments: measuredRedditEvidence,
+        analysis: createInferredEvidence({
+          provider: "OpenAI analysis of Firecrawl evidence",
+          observationDate: observedAt,
+          references: [redditReference],
+          explanation: "The opportunity is inferred from the public discussion."
+        })
+      }
     }
   ],
   competitorGaps: [
@@ -66,35 +153,22 @@ const validReport: OpportunityReport = {
       source: "example.com",
       url: "https://example.com",
       gap: "The competitor has clearer third-party source coverage.",
-      recommendedAction: "Create comparison content backed by useful source mentions."
+      recommendedAction: "Create comparison content backed by useful source mentions.",
+      evidence: createInferredEvidence({
+        provider: "OpenAI competitor analysis",
+        observationDate: observedAt,
+        references: [sourceReference],
+        explanation: "The gap is inferred from available search evidence."
+      })
     }
   ],
-  aiCitationOpportunities: [
-    {
-      prompt: "What are the best AI search visibility services?",
-      sampleAnswer: "Launch Club could be referenced alongside alternatives with stronger source coverage.",
-      citationAngle: "Create credible comparison and proof pages.",
-      isSimulation: true
-    },
-    {
-      prompt: "What do Reddit users recommend for AI search visibility?",
-      sampleAnswer: "Helpful Reddit discussions could make Launch Club easier to discover.",
-      citationAngle: "Participate with educational comments.",
-      isSimulation: true
-    },
-    {
-      prompt: "Which AI search visibility company is best for startups?",
-      sampleAnswer: "Launch Club could qualify with startup-specific proof.",
-      citationAngle: "Publish startup-specific positioning.",
-      isSimulation: true
-    },
-    {
-      prompt: "What are alternatives to common AI visibility platforms?",
-      sampleAnswer: "Launch Club needs structured alternatives content.",
-      citationAngle: "Create factual alternatives content.",
-      isSimulation: true
-    }
-  ],
+  aiCitationOpportunities: Array.from({ length: 4 }, (_, index) => ({
+    prompt: `AI search opportunity ${index + 1}?`,
+    sampleAnswer: "This is a simulated planning answer.",
+    citationAngle: "Create stronger source coverage.",
+    isSimulation: true as const,
+    evidence: createNotMeasuredEvidence("Live AI-platform visibility was not measured.")
+  })),
   memeConcepts: createMemeConcepts({
     companyName: "Launch Club",
     category: "AI search visibility",
@@ -104,15 +178,51 @@ const validReport: OpportunityReport = {
   bookingUrl: "mailto:hello@launchclub.ai?subject=Buyer%20Visibility%20Sprint",
   nextSteps: ["Prioritize the top Reddit-fit keywords."],
   evidenceSummary: {
+    researchMode: "live",
     crawlSummary: "Main page text was analyzed.",
     keywordSource: "Keyword metrics came from provider data.",
     redditSource: "Reddit links and summaries were stored.",
-    aiSearchSource: "AI-search examples are simulated opportunity examples, not verified live citations.",
+    aiSearchSource: "Live AI-platform visibility was not measured.",
     generatedWithRealAiChecks: false
-  }
+  },
+  claims: [
+    {
+      claimId: "keyword-volume",
+      claimText: "Ahrefs returned monthly volume for one keyword.",
+      ...measuredKeywordEvidence
+    }
+  ]
 };
 
-describe("report schema, scoring, and AI opportunity labeling", () => {
+describe("report evidence, scoring, and truth labeling", () => {
+  it("accepts the public search-intelligence handoff without claiming report completion", () => {
+    const response = reportResponseSchema.parse({
+      job: {
+        publicId: "secure-report-access",
+        status: "running",
+        state: "research_ready",
+        currentStep: "research_ready",
+        progress: null,
+        steps: [
+          { id: "queued", label: "Request received", status: "complete" },
+          { id: "crawl", label: "Reviewing your website", status: "complete" },
+          { id: "analysis", label: "Building your company profile", status: "complete" },
+          { id: "keywords", label: "Preparing your market research", status: "complete" }
+        ],
+        errorSummary: null
+      },
+      report: null
+    });
+
+    expect(response.job).toMatchObject({
+      status: "running",
+      state: "research_ready",
+      currentStep: "research_ready",
+      progress: null
+    });
+    expect(response.report).toBeNull();
+  });
+
   it("accepts a visitor-safe report payload", () => {
     expect(opportunityReportSchema.parse(validReport).publicId).toBe("report123");
   });
@@ -121,48 +231,156 @@ describe("report schema, scoring, and AI opportunity labeling", () => {
     const invalidReport = {
       ...validReport,
       aiCitationOpportunities: validReport.aiCitationOpportunities.slice(0, 3)
-    } as unknown;
+    };
 
     expect(() => opportunityReportSchema.parse(invalidReport)).toThrow();
   });
 
-  it("scores low-hanging opportunities from keywords, Reddit, and source gaps", () => {
-    const score = calculateOpportunityScore({
-      keywordOpportunities: validReport.keywordOpportunities,
-      redditOpportunities: validReport.redditOpportunities,
-      competitorGaps: validReport.competitorGaps
-    });
-
-    expect(score).toBeGreaterThanOrEqual(34);
-    expect(score).toBeLessThanOrEqual(98);
-    expect(getKeywordPriority(800, "High")).toBe("High");
-    expect(isAiOpportunitySimulationEnabled(false)).toBe(true);
+  it("validates evidence status values", () => {
+    expect(evidenceStatusSchema.parse("Measured")).toBe("Measured");
+    expect(() => evidenceStatusSchema.parse("Verified")).toThrow();
   });
 
-  it("normalizes the final report to the deterministic Launch Club opportunity score", () => {
+  it("requires evidence references for measured values and claims", () => {
+    const unsupportedMeasured = {
+      evidenceStatus: "Measured",
+      evidenceReferences: [],
+      observationDate: observedAt,
+      sourceProvider: "Ahrefs",
+      confidence: null,
+      publicExplanation: "Missing supporting evidence."
+    };
+
+    expect(() => evidenceMetadataSchema.parse(unsupportedMeasured)).toThrow(/requires evidence/i);
+    expect(() =>
+      reportClaimSchema.parse({
+        claimId: "unsupported",
+        claimText: "Unsupported measured claim.",
+        ...unsupportedMeasured
+      })
+    ).toThrow(/requires evidence/i);
+  });
+
+  it("keeps missing keyword metrics unavailable instead of inventing fallback values", () => {
+    const normalized = normalizeOpportunityReportForResponse({
+      report: {
+        ...validReport,
+        keywordOpportunities: [
+          {
+            ...validReport.keywordOpportunities[0],
+            monthlySearchVolume: null,
+            evidence: {
+              ...validReport.keywordOpportunities[0].evidence,
+              monthlySearchVolume: createUnavailableEvidence({
+                provider: "Ahrefs",
+                observationDate: observedAt,
+                explanation: "Ahrefs returned no volume."
+              })
+            }
+          }
+        ]
+      },
+      bookingUrl: validReport.bookingUrl
+    });
+
+    expect(normalized.keywordOpportunities[0].monthlySearchVolume).toBeNull();
+    expect(normalized.keywordOpportunities[0].evidence.monthlySearchVolume.evidenceStatus).toBe(
+      "Unavailable"
+    );
+  });
+
+  it("does not trust legacy keyword values that lack stored evidence", () => {
+    const legacyReport = structuredClone(validReport) as OpportunityReport;
+    delete (legacyReport.keywordOpportunities[0] as Partial<(typeof legacyReport.keywordOpportunities)[number]>).evidence;
+
+    const normalized = normalizeOpportunityReportForResponse({
+      report: legacyReport,
+      bookingUrl: validReport.bookingUrl
+    });
+
+    expect(normalized.keywordOpportunities[0].monthlySearchVolume).toBeNull();
+    expect(normalized.keywordOpportunities[0].evidence.monthlySearchVolume.evidenceStatus).toBe(
+      "Unavailable"
+    );
+  });
+
+  it("keeps missing Reddit metrics unavailable and never estimates monthly views", () => {
+    const report = structuredClone(validReport);
+    report.redditOpportunities[0].estimatedMonthlyViews = 9_999;
+    report.redditOpportunities[0].upvoteCount = null;
+    report.redditOpportunities[0].evidence.upvotes = createUnavailableEvidence({
+      provider: "Firecrawl",
+      observationDate: observedAt,
+      explanation: "Firecrawl returned no upvote count."
+    });
+
+    const normalized = normalizeOpportunityReportForResponse({
+      report,
+      bookingUrl: validReport.bookingUrl
+    });
+
+    expect(normalized.redditOpportunities[0].estimatedMonthlyViews).toBeNull();
+    expect(normalized.redditOpportunities[0].evidence.monthlyViews.evidenceStatus).toBe(
+      "Not measured"
+    );
+    expect(normalized.redditOpportunities[0].upvoteCount).toBeNull();
+    expect(normalized.redditOpportunities[0].evidence.upvotes.evidenceStatus).toBe("Unavailable");
+  });
+
+  it("prevents a configuration flag or mock payload from appearing as a measured AI check", () => {
+    const report = structuredClone(validReport) as OpportunityReport;
+    (report.aiCitationOpportunities[0] as unknown as { isSimulation: boolean }).isSimulation = false;
+    report.aiCitationOpportunities[0].evidence = measuredRedditEvidence;
+    report.evidenceSummary.generatedWithRealAiChecks = true;
+
+    const normalized = normalizeOpportunityReportForResponse({
+      report,
+      bookingUrl: validReport.bookingUrl
+    });
+
+    expect(isAiOpportunitySimulationEnabled(true)).toBe(true);
+    expect(normalized.aiCitationOpportunities.every((item) => item.isSimulation)).toBe(true);
+    expect(
+      normalized.aiCitationOpportunities.every(
+        (item) => item.evidence.evidenceStatus === "Not measured"
+      )
+    ).toBe(true);
+    expect(normalized.evidenceSummary.generatedWithRealAiChecks).toBe(false);
+  });
+
+  it("downgrades cached mock research even when an older report stored stronger labels", () => {
+    const report = structuredClone(validReport);
+    report.evidenceSummary.researchMode = "mock";
+    report.evidenceSummary.keywordSource = "Keyword metrics came from mock provider data in local mode.";
+
+    const normalized = normalizeOpportunityReportForResponse({
+      report,
+      bookingUrl: validReport.bookingUrl
+    });
+
+    expect(normalized.opportunityScoreEvidence.evidenceStatus).toBe("Not measured");
+    expect(normalized.businessEvidence.evidenceStatus).toBe("Not measured");
+    expect(normalized.keywordOpportunities[0].monthlySearchVolume).toBeNull();
+    expect(normalized.redditOpportunities[0].evidence.discussion.evidenceStatus).toBe(
+      "Not measured"
+    );
+    expect(normalized.claims.every((claim) => claim.evidenceStatus !== "Measured")).toBe(true);
+  });
+
+  it("keeps deterministic opportunity scoring but classifies it as inferred", () => {
     const expectedScore = calculateOpportunityScore({
       keywordOpportunities: validReport.keywordOpportunities,
       redditOpportunities: validReport.redditOpportunities,
       competitorGaps: validReport.competitorGaps
     });
-
-    const normalizedReport = normalizeOpportunityReportForResponse({
-      report: {
-        ...validReport,
-        opportunityScore: 1,
-        visibilitySnapshot: createVisibilitySnapshot({
-          opportunityScore: 1,
-          redditOpportunities: [],
-          keywordTraffic: 0
-        })
-      },
-      bookingUrl: validReport.bookingUrl,
-      enableRealAiChecks: false
+    const normalized = normalizeOpportunityReportForResponse({
+      report: { ...validReport, opportunityScore: 1 },
+      bookingUrl: validReport.bookingUrl
     });
 
-    expect(normalizedReport.opportunityScore).toBe(expectedScore);
-    expect(normalizedReport.visibilitySnapshot.targetAiVisibilityScore).toBeGreaterThan(
-      normalizedReport.visibilitySnapshot.currentAiVisibilityScore
-    );
+    expect(normalized.opportunityScore).toBe(expectedScore);
+    expect(normalized.opportunityScoreEvidence.evidenceStatus).toBe("Inferred");
+    expect(normalized.visibilitySnapshot.currentAiVisibilityScore).toBeNull();
+    expect(getKeywordPriority(800, "High")).toBe("High");
   });
 });

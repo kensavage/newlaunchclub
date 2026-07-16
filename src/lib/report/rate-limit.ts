@@ -1,3 +1,4 @@
+import "server-only";
 import crypto from "node:crypto";
 
 interface Bucket {
@@ -8,7 +9,11 @@ interface Bucket {
 const buckets = new Map<string, Bucket>();
 
 export function hashVisitorKey(value: string, salt: string) {
-  return crypto.createHash("sha256").update(`${salt}:${value}`).digest("hex");
+  return crypto.createHmac("sha256", salt).update(value).digest("hex");
+}
+
+export function resetRateLimitsForTests() {
+  buckets.clear();
 }
 
 export function assertRateLimit(key: string, limit = 5, windowMs = 60 * 60 * 1000) {
@@ -30,9 +35,9 @@ export function assertRateLimit(key: string, limit = 5, windowMs = 60 * 60 * 100
 export function getRequestIp(request: Request) {
   const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   return (
-    forwardedFor ||
     request.headers.get("x-nf-client-connection-ip") ||
     request.headers.get("x-real-ip") ||
+    forwardedFor ||
     "local"
   );
 }
